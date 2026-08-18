@@ -292,6 +292,14 @@ footer {
     text-align: left;
 }
 
+.keyimages-file {
+    display: block;
+    width: 97%;
+    margin: 12px auto 0;
+    font-size: 13px;
+    color: var(--text);
+}
+
 .asset-tabs {
     display: flex;
     gap: 8px;

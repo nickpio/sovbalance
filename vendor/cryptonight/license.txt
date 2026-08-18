@@ -1,0 +1,4 @@
+CryptoNight sources are based on The Monero Project (BSD-3-Clause),
+originally from the CryptoNote developers. See each source file for
+copyright notices. warnings.h in this directory is a local stub that
+avoids a Boost dependency.

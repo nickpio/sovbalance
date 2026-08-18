@@ -486,7 +486,7 @@ maxlength="64"
 placeholder="Private view key"
 spellcheck="false"></textarea>
 <input id="swal-restore" class="swal2-input" placeholder="Restore height (0 = genesis)" inputmode="numeric">
-<div class="wallet-hint">View-only wallets can see received outputs, including subaddresses. Spent funds still count until key images are imported. Use a restore height from around when the wallet was created to avoid a full-chain scan.</div>
+<div class="wallet-hint">View-only wallets can see received outputs, including subaddresses. Spent funds still count until you import key images from the spend wallet (Edit Wallet after a spend). Use a restore height from around when the wallet was created to avoid a full-chain scan.</div>
 </div>
 `,
 
@@ -629,12 +629,16 @@ async function editWallet(id) {
 
         title: "Edit Wallet",
 
+        customClass: { popup: "wallet-popup" },
+
         html: isXmr ? `
 <input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-address" class="swal2-textarea" rows="2">${wallet.address || ""}</textarea>
 <textarea id="swal-viewkey" class="swal2-textarea" rows="2">${wallet.viewKey || ""}</textarea>
 <input id="swal-restore" class="swal2-input" value="${wallet.restoreHeight || 0}" inputmode="numeric">
-<div class="wallet-hint">View-only incoming balance. Spent outputs still count until key images are imported.</div>
+<div class="wallet-hint">After you spend, export key images from the wallet that has the spend key (Monero GUI: Settings → Wallet → Export key images; Feather: File → Export → Key images) and attach that file here. Incoming funds do not need this.</div>
+<input id="swal-keyimages" class="keyimages-file" type="file">
+<textarea id="swal-keyimages-text" class="swal2-textarea" rows="3" placeholder="Or paste key images JSON" spellcheck="false"></textarea>
 ` : `
 <input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-xpub" class="swal2-textarea" rows="2">${wallet.xpub || ""}</textarea>
@@ -647,13 +651,30 @@ async function editWallet(id) {
         denyButtonText: "Delete",
         denyButtonColor: "#ef4444",
 
-        preConfirm: () => {
+        preConfirm: async () => {
             if (isXmr) {
+                const file = document.getElementById("swal-keyimages").files[0]
+                let fileBase64 = ""
+
+                if (file) {
+                    fileBase64 = await new Promise((resolve, reject) => {
+                        const reader = new FileReader()
+                        reader.onload = () => {
+                            const dataUrl = String(reader.result || "")
+                            resolve(dataUrl.split(",")[1] || "")
+                        }
+                        reader.onerror = reject
+                        reader.readAsDataURL(file)
+                    })
+                }
+
                 return {
                     wallet: cleanInput(document.getElementById("swal-wallet").value),
                     address: document.getElementById("swal-address").value.trim(),
                     viewKey: document.getElementById("swal-viewkey").value.trim(),
-                    restoreHeight: document.getElementById("swal-restore").value.trim() || 0
+                    restoreHeight: document.getElementById("swal-restore").value.trim() || 0,
+                    fileBase64,
+                    keyImagesText: document.getElementById("swal-keyimages-text").value.trim()
                 }
             }
 
@@ -675,7 +696,7 @@ async function editWallet(id) {
     }
 
     if (isXmr) {
-        const { wallet: newWallet, address, viewKey, restoreHeight } = result.value
+        const { wallet: newWallet, address, viewKey, restoreHeight, fileBase64, keyImagesText } = result.value
         const rescan = address !== wallet.address
             || viewKey !== wallet.viewKey
             || Number(restoreHeight) !== Number(wallet.restoreHeight)
@@ -688,7 +709,47 @@ async function editWallet(id) {
             restoreHeight
         })
 
-        if (ok) load(rescan)
+        if (!ok) return
+
+        if (fileBase64 || keyImagesText) {
+
+            Swal.fire({
+                title: "Importing key images",
+                text: "Refreshing the view-only wallet, then applying spends. This can take a while.",
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading()
+            })
+
+            const imported = await fetch("/wallet/key-images", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id: wallet.id,
+                    fileBase64: fileBase64 || undefined,
+                    payload: keyImagesText || undefined
+                })
+            }).then(r => r.json().then(data => ({ ok: r.ok, data }))).catch(() => ({ ok: false, data: {} }))
+
+            if (!imported.ok) {
+                await Swal.fire({
+                    icon: "error",
+                    title: imported.data.error || "Key image import failed"
+                })
+                load(false)
+                return
+            }
+
+            await Swal.fire({
+                icon: "success",
+                title: "Key images imported",
+                text: `Unspent ${Number(imported.data.unspent).toFixed(6)} XMR · spent ${Number(imported.data.spent).toFixed(6)} XMR`
+            })
+
+            load(false)
+            return
+        }
+
+        load(rescan)
         return
     }
 

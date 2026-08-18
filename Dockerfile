@@ -9,6 +9,11 @@ RUN npm ci --omit=dev
 
 COPY . .
 
+RUN apk add --no-cache gcc musl-dev make \
+  && make -C vendor/cryptonight \
+  && cp vendor/cryptonight/cn-slow-hash /usr/local/bin/cn-slow-hash \
+  && apk del gcc musl-dev make
+
 # cria usuário não-root (alinha com Umbrel)
 RUN addgroup -S app && adduser -S app -G app
 USER app

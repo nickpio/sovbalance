@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track your Bitcoin and Monero wallets privately from your own Umbrel
 category: bitcoin
-version: "1.1.0"
+version: "1.1.1"
 port: 3710
 description: >-
   Track your Bitcoin and Monero wallets privately from your own Umbrel.
