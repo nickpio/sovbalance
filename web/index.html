@@ -6,7 +6,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <meta name="description" content="Monitor XPUB wallet balances using your own Bitcoin node">
+  <meta name="description" content="Monitor Bitcoin XPUB and Monero view-only wallet balances using your own node">
   <meta name="application-name" content="bitBalance">
   <meta name="author" content="egzola">
 
@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" href="/icon.png">
   <meta name="theme-color" content="#0f1115">
 
-  <link rel="stylesheet" href="/style.css?v=9">
+  <link rel="stylesheet" href="/style.css?v=10">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -45,7 +45,7 @@
 
       <div class="metric main-metric">
         <div class="label">Total Balance</div>
-        <div id="totalTop" class="big-value">0.00000000 BTC</div>
+        <div id="totalTop" class="big-value">-</div>
         <div id="totalUSD" class="sub-value"></div>
       </div>
 
@@ -59,8 +59,9 @@
         </div>
 
         <div>
-          <div class="label">BTC Price</div>
+          <div class="label">Prices</div>
           <div id="btcPrice" class="side-value"></div>
+          <div id="xmrPrice" class="side-value"></div>
         </div>
       </div>
 
@@ -91,14 +92,14 @@
           <tr>
             <th>Wallet</th>
             <th class="percentage">%</th>
-            <th class="balance">BTC</th>
+            <th class="balance">Amount</th>
             <th class="chevron"></th>
           </tr>
         </thead>
 
         <tbody>
           <tr>
-            <td colspan="3" class="loading">
+            <td colspan="4" class="loading">
               <div class="scanner">
                 <span id="scanText">Scanning wallet...</span>
                 <div class="scanbar"></div>
