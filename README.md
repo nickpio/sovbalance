@@ -46,18 +46,13 @@ Your wallet data never leaves your infrastructure.
 - Track multiple Bitcoin and Monero wallets
 - Bitcoin: **XPUB, YPUB and ZPUB**
 - Monero: **view-only** wallets (primary address + private view key)
+- Import Monero **key images** after spending so spent outputs drop from the balance
 - Connects to your **local Electrs** and **Monero Node** apps
 - Combined USD total with per-asset amounts
 - No third-party balance APIs
 - Fully self-hosted
 - Lightweight and simple interface
 - Runs locally on **Umbrel**
-
----
-
-## Screenshot
-
-<img src="./web/screenshot.png" style="height:50%;width:50%;">
 
 ---
 
@@ -80,6 +75,21 @@ Addresses are derived locally and scanned against Electrs with a gap limit of 20
 | View-only | Mainnet primary address (starts with `4`, 95 characters) + private view key |
 
 View-only wallets can see received outputs, including subaddresses. Spent funds still count toward the balance until key images are imported. Set a restore height from around when the wallet was created to avoid a full-chain scan.
+
+---
+
+## Key images
+
+A view-only wallet cannot tell which outputs have been spent. After you spend from the wallet that has the spend key, export key images and import them in sovBalance so the balance can drop.
+
+1. Spend from your full / spend wallet as usual
+2. Export key images from that same spend wallet  
+   Monero GUI: **Settings → Wallet → Export key images**  
+   Feather: **File → Export → Key images**
+3. In sovBalance, open **Edit Wallet** on the matching Monero wallet
+4. Attach the export file, or paste `export_key_images` JSON, and save
+
+Incoming funds do not need this. Re-export and import again after each spend. The file is encrypted with the view key, so it must come from the spend wallet for the same address.
 
 ---
 
@@ -109,6 +119,8 @@ After installation the app will automatically connect to your **Electrs** and **
    Monero: paste a **primary address**, **private view key**, and optional **restore height**
 
 The wallet balance will be tracked automatically.
+
+After a Monero spend, import key images from **Edit Wallet** so spent outputs are no longer counted.
 
 ---
 
@@ -178,12 +190,14 @@ This project favors simplicity and control over abstraction.
 
 ---
 
-## Developer
+## Developers
 
-egzola
+Fork of [bitBalance](https://github.com/egzola/bitbalance) by egzola.
+
+Maintained by nickpio.
 
 GitHub  
-https://github.com/egzola
+https://github.com/nickpio/sovbalance
 
 ---
 
