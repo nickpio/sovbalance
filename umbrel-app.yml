@@ -1,24 +1,27 @@
 manifestVersion: 1.1
 id: bitbalance
 name: bitBalance
-tagline: Track your Bitcoin wallets privately from your own Umbrel
+tagline: Track your Bitcoin and Monero wallets privately from your own Umbrel
 category: bitcoin
-version: "1.0.18"
+version: "1.1.1"
 port: 3710
 description: >-
-  Track your Bitcoin wallets privately from your own Umbrel.
+  Track your Bitcoin and Monero wallets privately from your own Umbrel.
 
 
-  Monitor Bitcoin wallet balances privately using XPUB, YPUB, or ZPUB.
+  Monitor Bitcoin balances using XPUB, YPUB, or ZPUB, and Monero view-only
+  wallets using a primary address plus private view key.
 
 
-  Connects to your local Electrs server for maximum privacy, without relying on third-party APIs.
+  Connects to your local Electrs and Monero Node apps for maximum privacy,
+  without relying on third-party balance APIs.
 
 
   Stop checking balances on block explorers. Your wallets. Your node. Your privacy.
 
 
-  Supports multiple wallets, automatic gap limit scanning, and real-time balance updates directly from your Umbrel node.
+  Supports multiple wallets, automatic gap limit scanning for Bitcoin, and
+  view-only scanning for Monero directly from your Umbrel node.
 developer: egzola
 website: https://github.com/egzola/bitbalance
 repo: https://github.com/egzola/bitbalance
@@ -28,5 +31,6 @@ submission: https://github.com/getumbrel/umbrel-apps/pull/5082
 path: ""
 dependencies:
   - electrs
+  - monero
 gallery: []
 releaseNotes: ""

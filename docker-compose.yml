@@ -7,12 +7,31 @@ services:
       APP_PORT: 3710
 
   app:
-    image: ghcr.io/egzola/bitbalance:1.0.18@sha256:9d390c1aa9025a49c37604239700662236b8fc84138ae582fa66710ac4a82bf7
+    image: ghcr.io/nickpio/sovbalance:1.1.1
     restart: on-failure
     stop_grace_period: 1m
+    depends_on:
+      - wallet_rpc
     environment:
       PORT: 3710
       ELECTRUM_HOST: $APP_ELECTRS_NODE_IP
       ELECTRUM_PORT: $APP_ELECTRS_NODE_PORT
+      WALLET_RPC_HOST: wallet_rpc
+      WALLET_RPC_PORT: 18083
     volumes:
       - ${APP_DATA_DIR}/data:/data
+
+  wallet_rpc:
+    image: ghcr.io/sethforprivacy/simple-monero-wallet-rpc:v0.18.5.1@sha256:8f3fe0fd8f43b845c434c3936ef3808f411d4f0826c0536a68a2d9bf0866c557
+    restart: on-failure
+    stop_grace_period: 1m
+    command:
+      - --wallet-dir=/home/monero/wallet
+      - --rpc-bind-port=18083
+      - --disable-rpc-login
+      - --trusted-daemon
+      - --daemon-host=${APP_MONERO_NODE_IP}
+      - --daemon-port=${APP_MONERO_RPC_PORT}
+      - "--daemon-login=${APP_MONERO_RPC_USER}:${APP_MONERO_RPC_PASS}"
+    volumes:
+      - ${APP_DATA_DIR}/monero-wallets:/home/monero/wallet

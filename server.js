@@ -9,6 +9,7 @@ const { BIP32Factory } = require('bip32');
 const bip32 = BIP32Factory(ecc);
 
 const { zpubToXpub, ypubToXpub } = require('./derive');
+const monero = require('./monero');
 
 
 const isDocker = fs.existsSync("/.dockerenv");
@@ -26,7 +27,7 @@ const DATA_FILE = DATA_DIR + "/wallets.json";
 
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('web'));
 
@@ -52,9 +53,33 @@ try {
 try {
   const raw = fs.readFileSync(DATA_FILE, 'utf8')
   wallets = JSON.parse(raw || "[]")
+  wallets = wallets.map(normalizeStoredWallet)
 } catch (e) {
   console.error("READ ERROR:", e)
   wallets = []
+}
+
+
+function normalizeStoredWallet(w) {
+  if (!w.type) {
+    w.type = w.address ? "xmr" : "btc"
+  }
+  return w
+}
+
+
+function saveWallets() {
+  const toSave = wallets.map(w => {
+    const copy = { ...w }
+    delete copy.error
+    return copy
+  })
+  fs.writeFileSync(DATA_FILE, JSON.stringify(toSave, null, 2))
+}
+
+
+function walletType(w) {
+  return w.type || "btc"
 }
 
 
@@ -317,10 +342,31 @@ async function __getWalletBalance(xpub) {
 async function loadWallets() {
 
   try {
-    wallets = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"))
+    wallets = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")).map(normalizeStoredWallet)
   } catch {
     wallets = []
   }
+
+}
+
+
+async function scanWallet(w) {
+
+  if (walletType(w) === "xmr") {
+
+    try {
+      w.balance = await monero.getWalletBalance(w)
+      delete w.error
+    } catch (e) {
+      console.error("Error scanning Monero wallet:", e)
+      w.error = e.message
+    }
+
+    return
+  }
+
+  w.balance = await getWalletBalance(w.xpub)
+  delete w.error
 
 }
 
@@ -349,11 +395,10 @@ app.get("/wallets", async (req, res) => {
 
   if (rescan) {
     for (const w of wallets) {
-      w.balance = await getWalletBalance(w.xpub);
+      await scanWallet(w);
     }
 
-    // atualiza o arquivo com os novos saldos
-    fs.writeFileSync(DATA_FILE, JSON.stringify(wallets, null, 2));
+    saveWallets();
   }
 
   //wallets.sort((a, b) => a.order - b.order);
@@ -369,26 +414,61 @@ app.get("/wallets", async (req, res) => {
 app.post("/wallet", (req, res) => {
 
   const wallet = (req.body.wallet || "").trim()
-  const xpub = (req.body.xpub || "").trim()
+  const type = (req.body.type || "btc").trim().toLowerCase()
 
-  if (!wallet || !xpub)
-    return res.status(400).json({ error: "wallet/xpub required" })
-
-  validateKey(xpub);
-
-  if (wallets.some(w => w.xpub === xpub)) {
-    return res.status(400).json({ error: "xpub already exists" })
-  }
+  if (!wallet)
+    return res.status(400).json({ error: "wallet required" })
 
   const id = wallets.length > 0 ? Math.max(...wallets.map(w => w.id)) + 1 : 0;
   const order = wallets.length;
 
-  wallets.push({ id, order, wallet, xpub, balance: 0 });
+  if (type === "xmr") {
 
-  fs.writeFileSync(
-    DATA_FILE,
-    JSON.stringify(wallets, null, 2)
-  )
+    let info
+
+    try {
+      info = monero.validateMoneroWallet(req.body)
+    } catch (e) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (wallets.some(w => w.address === info.address)) {
+      return res.status(400).json({ error: "address already exists" })
+    }
+
+    wallets.push({
+      id,
+      order,
+      wallet,
+      type: "xmr",
+      address: info.address,
+      viewKey: info.viewKey,
+      restoreHeight: info.restoreHeight,
+      balance: 0
+    })
+
+  } else {
+
+    const xpub = (req.body.xpub || "").trim()
+
+    if (!xpub)
+      return res.status(400).json({ error: "wallet/xpub required" })
+
+    try {
+      validateKey(xpub)
+    } catch (e) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (wallets.some(w => w.xpub === xpub)) {
+      return res.status(400).json({ error: "xpub already exists" })
+    }
+
+    wallets.push({ id, order, wallet, type: "btc", xpub, balance: 0 })
+
+  }
+
+  saveWallets()
 
   res.json({ ok: true })
 })
@@ -397,54 +477,127 @@ app.post("/wallet", (req, res) => {
 
 app.post("/wallet/remove", (req, res) => {
 
+  const id = req.body.id
   const xpub = (req.body.xpub || "").trim()
+  const address = (req.body.address || "").trim()
 
-  if (!xpub) {
-    return res.status(400).json({ error: "xpub required" })
+  if (id !== undefined && id !== null && id !== "") {
+    wallets = wallets.filter(w => w.id !== Number(id))
+  } else if (xpub) {
+    wallets = wallets.filter(w => w.xpub !== xpub)
+  } else if (address) {
+    wallets = wallets.filter(w => w.address !== address)
+  } else {
+    return res.status(400).json({ error: "id required" })
   }
 
-  wallets = wallets.filter(w => w.xpub !== xpub)
-
-  fs.writeFileSync(
-    DATA_FILE,
-    JSON.stringify(wallets, null, 2)
-  )
+  saveWallets()
 
   res.json({ ok: true })
 
 })
 
 
-app.post("/wallet/update", (req, res) => {
+app.post("/wallet/key-images", async (req, res) => {
 
-  const oldXpub = (req.body.oldXpub || "").trim()
-  const wallet = (req.body.wallet || "").trim()
-  const xpub = (req.body.xpub || "").trim()
-
-  if (!oldXpub || !wallet || !xpub) {
-    return res.status(400).json({ error: "invalid data" })
-  }
-
-  validateKey(xpub)
-
-  const index = wallets.findIndex(w => w.xpub === oldXpub)
+  const id = Number(req.body.id)
+  const index = wallets.findIndex(w => w.id === id)
 
   if (index === -1) {
     return res.status(404).json({ error: "wallet not found" })
   }
 
-  if (wallets.some(w => w.xpub === xpub && w.xpub !== oldXpub)) {
-    return res.status(400).json({ error: "xpub already exists" })
+  const current = wallets[index]
+
+  if (walletType(current) !== "xmr") {
+    return res.status(400).json({ error: "Key images are only used for Monero wallets" })
   }
 
-  wallets[index].wallet = wallet;
-  wallets[index].xpub = xpub;
+  let payload = req.body.payload
+
+  if (req.body.fileBase64) {
+    payload = Buffer.from(req.body.fileBase64, "base64")
+  }
+
+  try {
+    const imported = await monero.importKeyImages(current, payload)
+    current.balance = imported.balance
+    delete current.error
+    saveWallets()
+    res.json({ ok: true, ...imported })
+  } catch (e) {
+    console.error("Error importing key images:", e.message)
+    res.status(400).json({ error: e.message })
+  }
+
+})
 
 
-  fs.writeFileSync(
-    DATA_FILE,
-    JSON.stringify(wallets, null, 2)
-  )
+app.post("/wallet/update", (req, res) => {
+
+  const wallet = (req.body.wallet || "").trim()
+  let index = -1
+
+  if (req.body.id !== undefined && req.body.id !== null && req.body.id !== "") {
+    index = wallets.findIndex(w => w.id === Number(req.body.id))
+  } else {
+    const oldXpub = (req.body.oldXpub || "").trim()
+    index = wallets.findIndex(w => w.xpub === oldXpub)
+  }
+
+  if (!wallet) {
+    return res.status(400).json({ error: "invalid data" })
+  }
+
+  if (index === -1) {
+    return res.status(404).json({ error: "wallet not found" })
+  }
+
+  const current = wallets[index]
+
+  if (walletType(current) === "xmr") {
+
+    let info
+
+    try {
+      info = monero.validateMoneroWallet(req.body)
+    } catch (e) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (wallets.some(w => w.address === info.address && w.id !== current.id)) {
+      return res.status(400).json({ error: "address already exists" })
+    }
+
+    current.wallet = wallet
+    current.address = info.address
+    current.viewKey = info.viewKey
+    current.restoreHeight = info.restoreHeight
+
+  } else {
+
+    const xpub = (req.body.xpub || "").trim()
+
+    if (!xpub) {
+      return res.status(400).json({ error: "invalid data" })
+    }
+
+    try {
+      validateKey(xpub)
+    } catch (e) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (wallets.some(w => w.xpub === xpub && w.id !== current.id)) {
+      return res.status(400).json({ error: "xpub already exists" })
+    }
+
+    current.wallet = wallet
+    current.xpub = xpub
+
+  }
+
+  saveWallets()
 
   res.json({ ok: true })
 
@@ -465,6 +618,12 @@ async function start() {
 
   await connectElectrum()
 
+  if (monero.isConfigured()) {
+    const ok = await monero.ping()
+    console.log(ok ? "Monero wallet-rpc connected" : "Monero wallet-rpc not reachable")
+  } else {
+    console.log("Monero wallet-rpc not configured")
+  }
 
   app.listen(appPort, () => {
     console.log(`bitBalance running on port ${appPort}`)

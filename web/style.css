@@ -284,6 +284,76 @@ footer {
     margin-top: 6px;
 }
 
+.wallet-hint {
+    font-size: 12px;
+    opacity: .62;
+    line-height: 1.4;
+    margin-top: 10px;
+    text-align: left;
+}
+
+.keyimages-file {
+    display: block;
+    width: 97%;
+    margin: 12px auto 0;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.asset-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0 4px;
+}
+
+.asset-tab {
+    flex: 1;
+    background: #232833;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.asset-tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+.asset-tab[data-asset="xmr"].active {
+    background: #ff6600;
+    border-color: #ff6600;
+}
+
+.coin-badge {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .4px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.coin-badge.btc {
+    background: rgba(247, 147, 26, .18);
+    color: #f7931a;
+}
+
+.coin-badge.xmr {
+    background: rgba(255, 102, 0, .18);
+    color: #ff6600;
+}
+
+.wallet-error {
+    color: #ef4444;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
 
 
 .scan-container {

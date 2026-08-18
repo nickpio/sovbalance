@@ -1,0 +1,7 @@
+.git
+.gitignore
+data
+node_modules
+*.md
+LICENSE
+vendor/cryptonight/cn-slow-hash
