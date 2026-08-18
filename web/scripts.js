@@ -832,8 +832,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         .then(data => data.appversion)
         .catch(() => "1.0.0")
 
-    document.title = `bitBalance ${appVersion}`
-    document.getElementById("app_version").innerText = `v${appVersion}`
+    document.title = `sovBalance ${appVersion}`
+    document.getElementById("app_version").innerText = appVersion
 
 
     load(false)
