@@ -36,9 +36,34 @@ let electrum = null;
 
 console.log("DATA_DIR:", DATA_DIR)
 console.log("DATA_FILE:", DATA_FILE)
+console.log("uid:", typeof process.getuid === "function" ? process.getuid() : "n/a")
+
+function ensureDataWritable() {
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  try {
+    fs.accessSync(DATA_DIR, fs.constants.W_OK)
+  } catch {
+    try {
+      fs.chmodSync(DATA_DIR, 0o777)
+    } catch (e) {
+      console.error("DATA DIR NOT WRITABLE:", e)
+    }
+  }
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      fs.accessSync(DATA_FILE, fs.constants.W_OK)
+    } catch {
+      try {
+        fs.chmodSync(DATA_FILE, 0o666)
+      } catch (e) {
+        console.error("DATA FILE NOT WRITABLE:", e)
+      }
+    }
+  }
+}
 
 try {
-  fs.mkdirSync(DATA_DIR, { recursive: true })
+  ensureDataWritable()
   console.log("dir ensured")
 
   if (!fs.existsSync(DATA_FILE)) {
@@ -74,7 +99,14 @@ function saveWallets() {
     delete copy.error
     return copy
   })
-  fs.writeFileSync(DATA_FILE, JSON.stringify(toSave, null, 2))
+  const payload = JSON.stringify(toSave, null, 2)
+  try {
+    fs.writeFileSync(DATA_FILE, payload)
+  } catch (e) {
+    if (e.code !== "EACCES") throw e
+    ensureDataWritable()
+    fs.writeFileSync(DATA_FILE, payload)
+  }
 }
 
 function saveWalletsToResponse(res) {
