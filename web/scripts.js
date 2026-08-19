@@ -9,6 +9,7 @@ var lastPriceFetch = 0
 
 let scanCounter = 0
 let scanInterval
+let scanning = false
 
 
 
@@ -40,6 +41,31 @@ function amountTitle(w) {
     return btcToSats(w.balance).toLocaleString() + " sats"
 }
 
+async function fetchJson(url, timeoutMs) {
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+        const r = await fetch(url, { signal: controller.signal })
+        const data = await r.json().catch(() => null)
+
+        if (!r.ok) {
+            throw new Error((data && data.error) || ("Request failed (" + r.status + ")"))
+        }
+
+        return data
+    } catch (e) {
+        if (e.name === "AbortError") {
+            throw new Error("Request timed out")
+        }
+        throw e
+    } finally {
+        clearTimeout(timer)
+    }
+
+}
+
 async function loadPrices() {
 
     const now = Date.now()
@@ -50,37 +76,19 @@ async function loadPrices() {
 
     try {
 
-        const r = await fetch(
-            "https://mempool.space/api/v1/prices"
-        )
+        const data = await fetchJson("/prices", 15000)
 
-        const data = await r.json()
-
-        btcPriceUSD = data.USD
-
-    } catch (e) {
-
-        console.error("BTC price error", e)
-
-    }
-
-    try {
-
-        const r = await fetch(
-            "https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd"
-        )
-
-        const data = await r.json()
-
-        xmrPriceUSD = data.monero && data.monero.usd || 0
+        btcPriceUSD = Number(data.btc) || 0
+        xmrPriceUSD = Number(data.xmr) || 0
+        if (btcPriceUSD || xmrPriceUSD) {
+            lastPriceFetch = Date.now()
+        }
 
     } catch (e) {
 
-        console.error("XMR price error", e)
+        console.error("price error", e)
 
     }
-
-    lastPriceFetch = now
 
 }
 
@@ -98,9 +106,7 @@ function coinTotals(wallets) {
 
 }
 
-async function updatePrices() {
-
-    await loadPrices()
+function paintPrices() {
 
     const { btc, xmr } = coinTotals(walletsCache)
     const usd = btc * btcPriceUSD + xmr * xmrPriceUSD
@@ -130,8 +136,20 @@ async function updatePrices() {
         ? "1 XMR = $" + xmrPriceUSD.toLocaleString(undefined, { maximumFractionDigits: 2 })
         : ""
 
-    const date = new Date(lastPriceFetch)
-    document.getElementById("lastUpdated").innerText = date.toLocaleTimeString()
+    if (lastPriceFetch && !scanning) {
+        document.getElementById("lastUpdated").innerText = new Date(lastPriceFetch).toLocaleTimeString()
+    }
+
+}
+
+async function updatePrices() {
+
+    await loadPrices()
+    paintPrices()
+
+    if (walletsCache.length) {
+        renderWallets(walletsCache)
+    }
 
 }
 
@@ -173,35 +191,32 @@ function stopScanIndicator() {
 }
 
 
-async function load(rescan = true) {
+async function fetchWallets(rescan) {
 
-    clearTable()
-    startScanIndicator()
+    const data = await fetchJson("/wallets?rescan=" + rescan, rescan ? 31 * 60 * 1000 : 15000)
 
-    let wallets = []
-
-    try {
-        const r = await fetch("/wallets?rescan=" + rescan)
-        wallets = await r.json()
-    } catch (e) {
-        stopScanIndicator()
-        console.error(e)
-        return
+    if (!Array.isArray(data)) {
+        throw new Error("Could not load wallets")
     }
 
+    return data
+
+}
+
+
+function renderWallets(wallets) {
+
+    walletsCache = wallets
+    stopScanIndicator()
+    paintPrices()
+
     if (wallets.length === 0) {
-        stopScanIndicator()
         document.querySelector("#t tbody").innerHTML = `
         <tr>
           <td colspan="4">ℹ️ No wallets configured yet</td>
         </tr>`
         return
     }
-
-    walletsCache = wallets
-    stopScanIndicator()
-
-    await updatePrices()
 
     const mixed = wallets.some(w => walletAsset(w) === "xmr") && wallets.some(w => walletAsset(w) === "btc")
     const useUsd = mixed && totalUSD > 0
@@ -243,6 +258,54 @@ async function load(rescan = true) {
     requestAnimationFrame(() => {
         renderChart(labels, values, useUsd)
     })
+
+}
+
+
+async function load(rescan = true) {
+
+    if (!walletsCache.length) {
+        clearTable()
+        startScanIndicator()
+    }
+
+    if (rescan) {
+        scanning = true
+        document.getElementById("lastUpdated").innerText = "Scanning…"
+    }
+
+    try {
+        renderWallets(await fetchWallets(false))
+    } catch (e) {
+        stopScanIndicator()
+        scanning = false
+        console.error(e)
+        document.querySelector("#t tbody").innerHTML = `
+        <tr>
+          <td colspan="4" class="wallet-error">${e.message || "Could not load wallets"}</td>
+        </tr>`
+        return
+    }
+
+    updatePrices()
+
+    if (!rescan) return
+
+    document.getElementById("lastUpdated").innerText = "Scanning…"
+
+    try {
+        renderWallets(await fetchWallets(true))
+    } catch (e) {
+        console.error(e)
+        document.getElementById("lastUpdated").innerText = e.message || "Scan failed"
+        return
+    } finally {
+        scanning = false
+    }
+
+    if (lastPriceFetch) {
+        document.getElementById("lastUpdated").innerText = new Date(lastPriceFetch).toLocaleTimeString()
+    }
 
 }
 
@@ -425,23 +488,35 @@ function renderChart(labels, data, useUsd = false) {
 
 async function saveWalletRequest(url, body) {
 
-    const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-    })
+    try {
 
-    const data = await r.json().catch(() => ({}))
+        const r = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        })
 
-    if (!r.ok) {
+        const data = await r.json().catch(() => ({}))
+
+        if (!r.ok) {
+            await Swal.fire({
+                icon: "error",
+                title: data.error || ("Request failed (" + r.status + ")")
+            })
+            return false
+        }
+
+        return true
+
+    } catch (e) {
+
         await Swal.fire({
             icon: "error",
-            title: data.error || "Request failed"
+            title: e.message || "Request failed"
         })
         return false
-    }
 
-    return true
+    }
 
 }
 
