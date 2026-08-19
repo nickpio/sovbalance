@@ -83,7 +83,7 @@ function saveWalletsToResponse(res) {
     return true
   } catch (e) {
     console.error("WRITE ERROR:", e)
-    res.status(500).json({ error: "Could not save wallets" })
+    res.status(500).json({ error: e.code === "EACCES" ? "Could not save wallets (permission denied)" : "Could not save wallets" })
     return false
   }
 }
