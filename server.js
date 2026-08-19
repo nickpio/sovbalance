@@ -36,9 +36,34 @@ let electrum = null;
 
 console.log("DATA_DIR:", DATA_DIR)
 console.log("DATA_FILE:", DATA_FILE)
+console.log("uid:", typeof process.getuid === "function" ? process.getuid() : "n/a")
+
+function ensureDataWritable() {
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  try {
+    fs.accessSync(DATA_DIR, fs.constants.W_OK)
+  } catch {
+    try {
+      fs.chmodSync(DATA_DIR, 0o777)
+    } catch (e) {
+      console.error("DATA DIR NOT WRITABLE:", e)
+    }
+  }
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      fs.accessSync(DATA_FILE, fs.constants.W_OK)
+    } catch {
+      try {
+        fs.chmodSync(DATA_FILE, 0o666)
+      } catch (e) {
+        console.error("DATA FILE NOT WRITABLE:", e)
+      }
+    }
+  }
+}
 
 try {
-  fs.mkdirSync(DATA_DIR, { recursive: true })
+  ensureDataWritable()
   console.log("dir ensured")
 
   if (!fs.existsSync(DATA_FILE)) {
@@ -74,7 +99,25 @@ function saveWallets() {
     delete copy.error
     return copy
   })
-  fs.writeFileSync(DATA_FILE, JSON.stringify(toSave, null, 2))
+  const payload = JSON.stringify(toSave, null, 2)
+  try {
+    fs.writeFileSync(DATA_FILE, payload)
+  } catch (e) {
+    if (e.code !== "EACCES") throw e
+    ensureDataWritable()
+    fs.writeFileSync(DATA_FILE, payload)
+  }
+}
+
+function saveWalletsToResponse(res) {
+  try {
+    saveWallets()
+    return true
+  } catch (e) {
+    console.error("WRITE ERROR:", e)
+    res.status(500).json({ error: e.code === "EACCES" ? "Could not save wallets (permission denied)" : "Could not save wallets" })
+    return false
+  }
 }
 
 
@@ -379,39 +422,120 @@ app.get("/health", async (req, res) => {
 });
 
 
-app.get("/wallets", async (req, res) => {
+const PRICE_UA = "sovBalance/" + appVersion
+let priceCache = { at: 0, btc: 0, xmr: 0 }
 
-  let rescan = req.query.rescan === "true";
+async function fetchJsonUrl(url, timeoutMs) {
+  const r = await fetch(url, {
+    headers: { "User-Agent": PRICE_UA, Accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+  if (!r.ok) {
+    throw new Error("HTTP " + r.status)
+  }
+  return r.json()
+}
 
-  await loadWallets();
+function krakenLast(data) {
+  const result = data && data.result
+  if (!result) return 0
+  const row = Object.values(result)[0]
+  const n = row && row.c && parseFloat(row.c[0])
+  return n > 0 ? n : 0
+}
 
-  /*
-    // removi para nao fazer muitas requisições em paralelo, o que pode travar o Electrum e causar timeouts. Agora as requisições são feitas de forma sequencial, o que é mais estável.
-    await Promise.all(wallets.map(async w => {
-      const balance = await getWalletBalance(w.xpub)
-      w.balance = balance
-    }))
-  */
+async function fetchBtcUsd() {
+  try {
+    const data = await fetchJsonUrl("https://mempool.space/api/v1/prices", 5000)
+    const n = Number(data.USD)
+    if (n > 0) return n
+  } catch (e) {
+    console.error("BTC price mempool:", e.message)
+  }
+  try {
+    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XBTUSD", 5000)
+    return krakenLast(data)
+  } catch (e) {
+    console.error("BTC price kraken:", e.message)
+    return 0
+  }
+}
 
-  if (rescan) {
-    for (const w of wallets) {
-      await scanWallet(w);
-    }
+async function fetchXmrUsd() {
+  try {
+    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XMRUSD", 5000)
+    const n = krakenLast(data)
+    if (n > 0) return n
+  } catch (e) {
+    console.error("XMR price kraken:", e.message)
+  }
+  try {
+    const data = await fetchJsonUrl("https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd", 5000)
+    return Number(data.monero && data.monero.usd) || 0
+  } catch (e) {
+    console.error("XMR price coingecko:", e.message)
+    return 0
+  }
+}
 
-    saveWallets();
+app.get("/prices", async (req, res) => {
+  const now = Date.now()
+
+  if (now - priceCache.at < 60000 && (priceCache.btc || priceCache.xmr)) {
+    return res.json({ btc: priceCache.btc, xmr: priceCache.xmr })
   }
 
-  //wallets.sort((a, b) => a.order - b.order);
-  // sort por nome da wallet
-  wallets.sort((a, b) => a.wallet.localeCompare(b.wallet));
+  try {
+    const [btc, xmr] = await Promise.all([fetchBtcUsd(), fetchXmrUsd()])
 
-  res.json(wallets)
+    if (btc || xmr) {
+      priceCache = { at: now, btc, xmr }
+      return res.json({ btc, xmr })
+    }
+  } catch (e) {
+    console.error("price error:", e.message)
+  }
+
+  res.json({ btc: priceCache.btc, xmr: priceCache.xmr })
+});
+
+
+app.get("/wallets", async (req, res) => {
+
+  try {
+
+    let rescan = req.query.rescan === "true";
+
+    await loadWallets();
+
+    if (rescan) {
+      for (const w of wallets) {
+        await scanWallet(w);
+      }
+
+      try {
+        saveWallets();
+      } catch (e) {
+        console.error("WRITE ERROR:", e)
+      }
+    }
+
+    wallets.sort((a, b) => a.wallet.localeCompare(b.wallet));
+
+    res.json(wallets)
+
+  } catch (e) {
+    console.error("WALLETS ERROR:", e)
+    res.status(500).json({ error: e.message || "Could not load wallets" })
+  }
 
 })
 
 
 
 app.post("/wallet", (req, res) => {
+
+  try {
 
   const wallet = (req.body.wallet || "").trim()
   const type = (req.body.type || "btc").trim().toLowerCase()
@@ -468,9 +592,16 @@ app.post("/wallet", (req, res) => {
 
   }
 
-  saveWallets()
+  if (!saveWalletsToResponse(res)) return
 
   res.json({ ok: true })
+
+  } catch (e) {
+    console.error("SAVE WALLET ERROR:", e)
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message || "Could not save wallet" })
+    }
+  }
 })
 
 
@@ -491,7 +622,7 @@ app.post("/wallet/remove", (req, res) => {
     return res.status(400).json({ error: "id required" })
   }
 
-  saveWallets()
+  if (!saveWalletsToResponse(res)) return
 
   res.json({ ok: true })
 
@@ -597,7 +728,7 @@ app.post("/wallet/update", (req, res) => {
 
   }
 
-  saveWallets()
+  if (!saveWalletsToResponse(res)) return
 
   res.json({ ok: true })
 

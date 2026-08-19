@@ -166,6 +166,7 @@ async function getWalletBalance(wallet) {
 
   return withLock(async () => {
 
+    await rpc("get_version", {}, 5000)
     await openOrCreate(wallet)
 
     try {
