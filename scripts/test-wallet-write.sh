@@ -111,7 +111,7 @@ run_case() {
 
 echo "Testing image ${IMAGE}"
 
-# Cases that 1.1.4 must pass (no compose user, image default = root)
+# Cases that 1.2.0 must pass (no compose user, image default = root)
 run_case "root-owned-dir" "" "0:0" ""
 run_case "uid1000-owned-dir" "" "1000:1000" ""
 run_case "uid100-owned-dir" "" "100:100" ""

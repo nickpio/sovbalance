@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track your Bitcoin and Monero wallets privately from your own Umbrel
 category: bitcoin
-version: "1.1.4"
+version: "1.2.0"
 port: 3710
 description: >-
   Track your Bitcoin and Monero wallets privately from your own Umbrel.
@@ -33,4 +33,8 @@ dependencies:
   - electrs
   - monero
 gallery: []
-releaseNotes: ""
+releaseNotes: >-
+  Adds a settings menu with USD/CAD prices and Bitcoin/Monero display
+  units (BTC, mBTC, sats, XMR, piconeros). Totals show fiat first, then
+  each coin. Orange, black, and white theme. Stops Electrum reconnects
+  from exhausting memory when Electrs is unreachable.

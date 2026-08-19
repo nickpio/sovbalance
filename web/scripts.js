@@ -2,10 +2,17 @@ let chart
 let walletsCache = []
 var totalBTC = 0
 var totalXMR = 0
-var totalUSD = 0
-var btcPriceUSD = 0
-var xmrPriceUSD = 0
+var totalFiat = 0
+var btcPrices = { USD: 0, CAD: 0 }
+var xmrPrices = { USD: 0, CAD: 0 }
 var lastPriceFetch = 0
+var fiatCurrency = localStorage.getItem("sovbalance-fiat") === "CAD" ? "CAD" : "USD"
+var btcUnit = ["btc", "mbtc", "sats"].includes(localStorage.getItem("sovbalance-btc-unit"))
+    ? localStorage.getItem("sovbalance-btc-unit")
+    : "btc"
+var xmrUnit = ["xmr", "piconero"].includes(localStorage.getItem("sovbalance-xmr-unit"))
+    ? localStorage.getItem("sovbalance-xmr-unit")
+    : "xmr"
 
 let scanCounter = 0
 let scanInterval
@@ -14,29 +21,73 @@ let scanning = false
 
 
 function btcToSats(btc) {
-    return Number(BigInt(Math.round(btc * 1e8)))
+    return Number(BigInt(Math.round(Number(btc) * 1e8)))
+}
+
+function xmrToPiconero(xmr) {
+    const n = Number(xmr)
+    if (!Number.isFinite(n) || n === 0) return 0n
+    const sign = n < 0 ? -1n : 1n
+    const [w, f = ""] = Math.abs(n).toFixed(12).split(".")
+    return sign * BigInt(w + f.padEnd(12, "0").slice(0, 12))
+}
+
+function formatBtcAmount(btc) {
+    const n = Number(btc) || 0
+    if (btcUnit === "sats") {
+        return btcToSats(n).toLocaleString() + " sats"
+    }
+    if (btcUnit === "mbtc") {
+        return (n * 1000).toFixed(5) + " mBTC"
+    }
+    return n.toFixed(8) + " BTC"
+}
+
+function formatXmrAmount(xmr) {
+    const n = Number(xmr) || 0
+    if (xmrUnit === "piconero") {
+        return xmrToPiconero(n).toLocaleString() + " piconeros"
+    }
+    return n.toFixed(6) + " XMR"
+}
+
+function splitAmountLabel(text) {
+    const i = String(text).lastIndexOf(" ")
+    if (i < 0) return { value: text, unit: "" }
+    return { value: text.slice(0, i), unit: text.slice(i + 1) }
 }
 
 function walletAsset(w) {
     return w.type === "xmr" ? "xmr" : "btc"
 }
 
-function walletUsd(w) {
+function fiatOf(prices) {
+    return Number(prices[fiatCurrency]) || 0
+}
+
+function walletFiat(w) {
     return walletAsset(w) === "xmr"
-        ? w.balance * xmrPriceUSD
-        : w.balance * btcPriceUSD
+        ? w.balance * fiatOf(xmrPrices)
+        : w.balance * fiatOf(btcPrices)
+}
+
+function formatFiat(amount, digits = 2) {
+    return "$" + amount.toLocaleString(undefined, { maximumFractionDigits: digits })
 }
 
 function formatAmount(w) {
     if (walletAsset(w) === "xmr") {
-        return Number(w.balance).toFixed(6) + " XMR"
+        return formatXmrAmount(w.balance)
     }
-    return Number(w.balance).toFixed(8) + " BTC"
+    return formatBtcAmount(w.balance)
 }
 
 function amountTitle(w) {
     if (walletAsset(w) === "xmr") {
         return "View-only incoming balance. Spent outputs still count until key images are imported."
+    }
+    if (btcUnit === "sats") {
+        return Number(w.balance).toFixed(8) + " BTC"
     }
     return btcToSats(w.balance).toLocaleString() + " sats"
 }
@@ -66,11 +117,22 @@ async function fetchJson(url, timeoutMs) {
 
 }
 
+function readFiatMap(value) {
+    if (value && typeof value === "object") {
+        return {
+            USD: Number(value.USD) || 0,
+            CAD: Number(value.CAD) || 0
+        }
+    }
+    const n = Number(value) || 0
+    return { USD: n, CAD: 0 }
+}
+
 async function loadPrices() {
 
     const now = Date.now()
 
-    if ((btcPriceUSD || xmrPriceUSD) && now - lastPriceFetch < 300000) {
+    if ((fiatOf(btcPrices) || fiatOf(xmrPrices)) && now - lastPriceFetch < 300000) {
         return
     }
 
@@ -78,9 +140,9 @@ async function loadPrices() {
 
         const data = await fetchJson("/prices", 15000)
 
-        btcPriceUSD = Number(data.btc) || 0
-        xmrPriceUSD = Number(data.xmr) || 0
-        if (btcPriceUSD || xmrPriceUSD) {
+        btcPrices = readFiatMap(data.btc)
+        xmrPrices = readFiatMap(data.xmr)
+        if (fiatOf(btcPrices) || fiatOf(xmrPrices)) {
             lastPriceFetch = Date.now()
         }
 
@@ -109,37 +171,113 @@ function coinTotals(wallets) {
 function paintPrices() {
 
     const { btc, xmr } = coinTotals(walletsCache)
-    const usd = btc * btcPriceUSD + xmr * xmrPriceUSD
+    const btcPrice = fiatOf(btcPrices)
+    const xmrPrice = fiatOf(xmrPrices)
+    const fiat = btc * btcPrice + xmr * xmrPrice
 
     totalBTC = btc
     totalXMR = xmr
-    totalUSD = usd
+    totalFiat = fiat
 
-    const parts = []
-    if (btc) parts.push(btc.toFixed(8) + " BTC")
-    if (xmr) parts.push(xmr.toFixed(6) + " XMR")
-    if (!parts.length) parts.push("0.00000000 BTC")
+    document.getElementById("totalTop").innerText = formatFiat(fiat) + " " + fiatCurrency
+    document.getElementById("totalBTC").innerText = formatBtcAmount(btc)
+    document.getElementById("totalXMR").innerText = formatXmrAmount(xmr)
 
-    if (usd > 0) {
-        document.getElementById("totalTop").innerText = "$" + usd.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " USD"
-        document.getElementById("totalUSD").innerText = parts.join("  ·  ")
-    } else {
-        document.getElementById("totalTop").innerText = parts.join("  ·  ")
-        document.getElementById("totalUSD").innerText = ""
-    }
-
-    document.getElementById("btcPrice").innerText = btcPriceUSD
-        ? "1 BTC = $" + btcPriceUSD.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    document.getElementById("btcPrice").innerText = btcPrice
+        ? "1 BTC = " + formatFiat(btcPrice) + " " + fiatCurrency
         : ""
 
-    document.getElementById("xmrPrice").innerText = xmrPriceUSD
-        ? "1 XMR = $" + xmrPriceUSD.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    document.getElementById("xmrPrice").innerText = xmrPrice
+        ? "1 XMR = " + formatFiat(xmrPrice) + " " + fiatCurrency
         : ""
 
     if (lastPriceFetch && !scanning) {
         document.getElementById("lastUpdated").innerText = new Date(lastPriceFetch).toLocaleTimeString()
     }
 
+}
+
+function applyDisplay() {
+    paintPrices()
+    if (walletsCache.length) {
+        renderWallets(walletsCache)
+    }
+}
+
+function setFiat(next) {
+    if (next !== "USD" && next !== "CAD") return
+    if (next === fiatCurrency) return
+    fiatCurrency = next
+    localStorage.setItem("sovbalance-fiat", next)
+    updatePrices()
+}
+
+function setBtcUnit(next) {
+    if (next !== "btc" && next !== "mbtc" && next !== "sats") return
+    if (next === btcUnit) return
+    btcUnit = next
+    localStorage.setItem("sovbalance-btc-unit", next)
+    applyDisplay()
+}
+
+function setXmrUnit(next) {
+    if (next !== "xmr" && next !== "piconero") return
+    if (next === xmrUnit) return
+    xmrUnit = next
+    localStorage.setItem("sovbalance-xmr-unit", next)
+    applyDisplay()
+}
+
+function syncSettingsTabs() {
+    document.querySelectorAll("[data-setting]").forEach(btn => {
+        const on = (btn.dataset.setting === "fiat" && btn.dataset.value === fiatCurrency)
+            || (btn.dataset.setting === "btcUnit" && btn.dataset.value === btcUnit)
+            || (btn.dataset.setting === "xmrUnit" && btn.dataset.value === xmrUnit)
+        btn.classList.toggle("active", on)
+    })
+}
+
+function openSettings() {
+    Swal.fire({
+        title: "Settings",
+        customClass: { popup: "settings-popup" },
+        confirmButtonText: "Done",
+        html: `
+<div class="settings-section">
+  <div class="settings-label">Fiat currency</div>
+  <div class="asset-tabs">
+    <button type="button" class="asset-tab" data-setting="fiat" data-value="USD">USD</button>
+    <button type="button" class="asset-tab" data-setting="fiat" data-value="CAD">CAD</button>
+  </div>
+</div>
+<div class="settings-section">
+  <div class="settings-label">Bitcoin amounts</div>
+  <div class="asset-tabs">
+    <button type="button" class="asset-tab" data-setting="btcUnit" data-value="btc">BTC</button>
+    <button type="button" class="asset-tab" data-setting="btcUnit" data-value="mbtc">mBTC</button>
+    <button type="button" class="asset-tab" data-setting="btcUnit" data-value="sats">sats</button>
+  </div>
+</div>
+<div class="settings-section">
+  <div class="settings-label">Monero amounts</div>
+  <div class="asset-tabs">
+    <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="xmr">XMR</button>
+    <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="piconero">piconeros</button>
+  </div>
+</div>
+`,
+        willOpen: () => {
+            syncSettingsTabs()
+            document.querySelectorAll("[data-setting]").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    if (btn.dataset.setting === "fiat") setFiat(btn.dataset.value)
+                    else if (btn.dataset.setting === "btcUnit") setBtcUnit(btn.dataset.value)
+                    else if (btn.dataset.setting === "xmrUnit") setXmrUnit(btn.dataset.value)
+                    syncSettingsTabs()
+                })
+            })
+        }
+    })
 }
 
 async function updatePrices() {
@@ -219,7 +357,7 @@ function renderWallets(wallets) {
     }
 
     const mixed = wallets.some(w => walletAsset(w) === "xmr") && wallets.some(w => walletAsset(w) === "btc")
-    const useUsd = mixed && totalUSD > 0
+    const useFiat = mixed && totalFiat > 0
 
     let rows = ""
     const labels = []
@@ -228,9 +366,9 @@ function renderWallets(wallets) {
     for (const w of wallets) {
 
         const asset = walletAsset(w)
-        const usd = walletUsd(w)
-        const share = useUsd
-            ? (totalUSD > 0 ? (usd / totalUSD) * 100 : 0)
+        const fiat = walletFiat(w)
+        const share = useFiat
+            ? (totalFiat > 0 ? (fiat / totalFiat) * 100 : 0)
             : asset === "xmr"
                 ? (totalXMR > 0 ? (w.balance / totalXMR) * 100 : 0)
                 : (totalBTC > 0 ? (w.balance / totalBTC) * 100 : 0)
@@ -238,7 +376,7 @@ function renderWallets(wallets) {
         const perc = share.toFixed(1)
 
         labels.push(w.wallet)
-        values.push(useUsd ? usd : w.balance)
+        values.push(useFiat ? fiat : w.balance)
 
         const error = w.error
             ? `<div class="wallet-error">${w.error}</div>`
@@ -256,7 +394,7 @@ function renderWallets(wallets) {
     document.querySelector("#t tbody").innerHTML = rows
 
     requestAnimationFrame(() => {
-        renderChart(labels, values, useUsd)
+        renderChart(labels, values, useFiat)
     })
 
 }
@@ -313,7 +451,8 @@ async function load(rescan = true) {
 function clearTable() {
     document.querySelector("#t tbody").innerHTML = ""
     document.getElementById("totalTop").innerText = "-"
-    document.getElementById("totalUSD").innerText = ""
+    document.getElementById("totalBTC").innerText = ""
+    document.getElementById("totalXMR").innerText = ""
     if (chart) chart.destroy()
 }
 
@@ -393,7 +532,7 @@ const dimOthers = {
 
 
 
-function renderChart(labels, data, useUsd = false) {
+function renderChart(labels, data, useFiat = false) {
 
     const canvas = document.getElementById("chart").getContext("2d")
 
@@ -408,17 +547,17 @@ function renderChart(labels, data, useUsd = false) {
             datasets: [{
                 data: [],
                 backgroundColor: [
-                    "#3b82f6",
-                    "#22c55e",
-                    "#f59e0b",
-                    "#ef4444",
-                    "#a855f7",
-                    "#14b8a6"
+                    "#f7931a",
+                    "#ff6600",
+                    "#ffffff",
+                    "#c2410c",
+                    "#fdba74",
+                    "#737373"
                 ],
-                borderColor: "rgba(0,0,0,0.15)",
+                borderColor: "rgba(0,0,0,0.35)",
                 borderWidth: 1,
 
-                hoverBorderColor: "#0f1115",
+                hoverBorderColor: "#000000",
                 hoverOffset: 12,
                 hoverBorderWidth: 3
 
@@ -448,21 +587,29 @@ function renderChart(labels, data, useUsd = false) {
 
             plugins: {
 
-                legend: { position: "bottom" },
+                legend: {
+                    position: "bottom",
+                    labels: { color: "#ffffff" }
+                },
 
                 tooltip: {
+                    backgroundColor: "#111111",
+                    titleColor: "#ffffff",
+                    bodyColor: "#ffffff",
+                    borderColor: "#f7931a",
+                    borderWidth: 1,
                     callbacks: {
                         label: (ctx) => {
 
                             const wallet = walletsCache[ctx.dataIndex]
-                            const perc = useUsd
-                                ? (totalUSD > 0 ? ((ctx.raw / totalUSD) * 100).toFixed(2) : "0.00")
+                            const perc = useFiat
+                                ? (totalFiat > 0 ? ((ctx.raw / totalFiat) * 100).toFixed(2) : "0.00")
                                 : walletAsset(wallet) === "xmr"
                                     ? (totalXMR > 0 ? ((wallet.balance / totalXMR) * 100).toFixed(2) : "0.00")
                                     : (totalBTC > 0 ? ((wallet.balance / totalBTC) * 100).toFixed(2) : "0.00")
 
-                            if (useUsd) {
-                                return `${perc}%   •   ${formatAmount(wallet)}   •   $${ctx.raw.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                            if (useFiat) {
+                                return `${perc}%   •   ${formatAmount(wallet)}   •   ${formatFiat(ctx.raw)} ${fiatCurrency}`
                             }
 
                             return `${perc}%   •   ${formatAmount(wallet)}`
@@ -873,24 +1020,26 @@ const centerText = {
         ctx.textAlign = "center"
         ctx.textBaseline = "middle"
 
-        ctx.fillStyle = "#e6e6e6"
+        ctx.fillStyle = "#ffffff"
         ctx.font = "600 18px system-ui"
 
-        if (totalUSD > 0) {
-            ctx.fillText("$" + totalUSD.toLocaleString(undefined, { maximumFractionDigits: 0 }), x, y - 8)
-            ctx.fillStyle = "#9ca3af"
+        if (totalFiat > 0) {
+            ctx.fillText(formatFiat(totalFiat, 0), x, y - 8)
+            ctx.fillStyle = "#a3a3a3"
             ctx.font = "400 14px system-ui"
-            ctx.fillText("USD", x, y + 14)
+            ctx.fillText(fiatCurrency, x, y + 14)
         } else if (totalXMR && !totalBTC) {
-            ctx.fillText(totalXMR.toFixed(4), x, y - 8)
-            ctx.fillStyle = "#9ca3af"
+            const { value, unit } = splitAmountLabel(formatXmrAmount(totalXMR))
+            ctx.fillText(value, x, y - 8)
+            ctx.fillStyle = "#ff6600"
             ctx.font = "400 14px system-ui"
-            ctx.fillText("XMR", x, y + 14)
+            ctx.fillText(unit, x, y + 14)
         } else {
-            ctx.fillText(totalBTC.toFixed(8), x, y - 8)
-            ctx.fillStyle = "#9ca3af"
+            const { value, unit } = splitAmountLabel(formatBtcAmount(totalBTC))
+            ctx.fillText(value, x, y - 8)
+            ctx.fillStyle = "#f7931a"
             ctx.font = "400 14px system-ui"
-            ctx.fillText("BTC", x, y + 14)
+            ctx.fillText(unit || "BTC", x, y + 14)
         }
 
         ctx.restore()
@@ -971,10 +1120,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     document.title = `sovBalance ${appVersion}`
     document.getElementById("app_version").innerText = appVersion
 
+    document.getElementById("donateBtn").addEventListener("click", donateModal)
 
     load(false)
-
-    document.getElementById("donateBtn").addEventListener("click", donateModal)
 
     setInterval(updatePrices, 60 * 1000)
 

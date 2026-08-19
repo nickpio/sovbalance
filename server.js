@@ -33,6 +33,8 @@ app.use(express.static('web'));
 
 let wallets = [];
 let electrum = null;
+let electrumConnecting = false;
+let electrumReconnectTimer = null;
 
 console.log("DATA_DIR:", DATA_DIR)
 console.log("DATA_FILE:", DATA_FILE)
@@ -126,29 +128,61 @@ function walletType(w) {
 }
 
 
+function closeElectrum() {
+  if (!electrum) return
+  try {
+    electrum.onClose = () => {}
+    electrum.close()
+  } catch (e) {}
+  electrum = null
+}
+
+function scheduleElectrumReconnect() {
+  if (electrumReconnectTimer) return
+  electrumReconnectTimer = setTimeout(() => {
+    electrumReconnectTimer = null
+    connectElectrum()
+  }, 5000)
+}
+
 async function connectElectrum() {
+
+  if (electrumConnecting) return
+  electrumConnecting = true
+
+  if (electrumReconnectTimer) {
+    clearTimeout(electrumReconnectTimer)
+    electrumReconnectTimer = null
+  }
+
+  closeElectrum()
 
   try {
 
-    electrum = new ElectrumClient(PORT, HOST, 'tcp')
+    const client = new ElectrumClient(PORT, HOST, 'tcp')
 
-    electrum.onClose = () => {
+    client.onClose = () => {
       console.log("Electrum disconnected")
-      setTimeout(connectElectrum, 5000)
+      if (electrum === client) electrum = null
+      scheduleElectrumReconnect()
     }
 
-    await electrum.connect()
+    electrum = client
 
-    await electrum.server_version("bitBalance", "1.4")
+    await client.connect()
+
+    await client.server_version("bitBalance", "1.4")
 
     console.log("Electrum connected")
 
   } catch (e) {
 
     console.error("Electrum connect error:", e)
+    closeElectrum()
+    scheduleElectrumReconnect()
 
-    setTimeout(connectElectrum, 5000)
-
+  } finally {
+    electrumConnecting = false
   }
 
 }
@@ -423,7 +457,8 @@ app.get("/health", async (req, res) => {
 
 
 const PRICE_UA = "sovBalance/" + appVersion
-let priceCache = { at: 0, btc: 0, xmr: 0 }
+const emptyFiat = () => ({ USD: 0, CAD: 0 })
+let priceCache = { at: 0, btc: emptyFiat(), xmr: emptyFiat() }
 
 async function fetchJsonUrl(url, timeoutMs) {
   const r = await fetch(url, {
@@ -436,59 +471,101 @@ async function fetchJsonUrl(url, timeoutMs) {
   return r.json()
 }
 
-function krakenLast(data) {
-  const result = data && data.result
-  if (!result) return 0
-  const row = Object.values(result)[0]
-  const n = row && row.c && parseFloat(row.c[0])
-  return n > 0 ? n : 0
+function anyFiat(p) {
+  return !!(p && (p.USD || p.CAD))
 }
 
-async function fetchBtcUsd() {
+function mergeFiat(into, from) {
+  if (!from) return into
+  if (!into.USD && from.USD) into.USD = from.USD
+  if (!into.CAD && from.CAD) into.CAD = from.CAD
+  return into
+}
+
+function fillFiatGap(btc, xmr) {
+  const usd = btc.USD || xmr.USD
+  const cad = btc.CAD || xmr.CAD
+  if (!usd || !cad) return
+  const rate = cad / usd
+  if (btc.USD && !btc.CAD) btc.CAD = btc.USD * rate
+  if (btc.CAD && !btc.USD) btc.USD = btc.CAD / rate
+  if (xmr.USD && !xmr.CAD) xmr.CAD = xmr.USD * rate
+  if (xmr.CAD && !xmr.USD) xmr.USD = xmr.CAD / rate
+}
+
+function krakenQuotes(data) {
+  const out = emptyFiat()
+  const result = data && data.result
+  if (!result) return out
+  for (const [key, row] of Object.entries(result)) {
+    const n = row && row.c && parseFloat(row.c[0])
+    if (!(n > 0)) continue
+    if (key.endsWith("USD")) out.USD = n
+    if (key.endsWith("CAD")) out.CAD = n
+  }
+  return out
+}
+
+function geckoQuotes(coin) {
+  const out = emptyFiat()
+  if (!coin) return out
+  const usd = Number(coin.usd)
+  const cad = Number(coin.cad)
+  if (usd > 0) out.USD = usd
+  if (cad > 0) out.CAD = cad
+  return out
+}
+
+async function fetchBtcPrices() {
+  const prices = emptyFiat()
   try {
     const data = await fetchJsonUrl("https://mempool.space/api/v1/prices", 5000)
-    const n = Number(data.USD)
-    if (n > 0) return n
+    const usd = Number(data.USD)
+    const cad = Number(data.CAD)
+    if (usd > 0) prices.USD = usd
+    if (cad > 0) prices.CAD = cad
+    if (prices.USD && prices.CAD) return prices
   } catch (e) {
     console.error("BTC price mempool:", e.message)
   }
   try {
-    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XBTUSD", 5000)
-    return krakenLast(data)
+    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,XBTCAD", 5000)
+    mergeFiat(prices, krakenQuotes(data))
   } catch (e) {
     console.error("BTC price kraken:", e.message)
-    return 0
   }
+  return prices
 }
 
-async function fetchXmrUsd() {
+async function fetchXmrPrices() {
+  const prices = emptyFiat()
   try {
     const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XMRUSD", 5000)
-    const n = krakenLast(data)
-    if (n > 0) return n
+    mergeFiat(prices, krakenQuotes(data))
   } catch (e) {
     console.error("XMR price kraken:", e.message)
   }
   try {
-    const data = await fetchJsonUrl("https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd", 5000)
-    return Number(data.monero && data.monero.usd) || 0
+    const data = await fetchJsonUrl("https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd,cad", 5000)
+    mergeFiat(prices, geckoQuotes(data.monero))
   } catch (e) {
     console.error("XMR price coingecko:", e.message)
-    return 0
   }
+  return prices
 }
 
 app.get("/prices", async (req, res) => {
   const now = Date.now()
 
-  if (now - priceCache.at < 60000 && (priceCache.btc || priceCache.xmr)) {
+  if (now - priceCache.at < 60000 && (anyFiat(priceCache.btc) || anyFiat(priceCache.xmr))) {
     return res.json({ btc: priceCache.btc, xmr: priceCache.xmr })
   }
 
   try {
-    const [btc, xmr] = await Promise.all([fetchBtcUsd(), fetchXmrUsd()])
+    const [btc, xmr] = await Promise.all([fetchBtcPrices(), fetchXmrPrices()])
+    fillFiatGap(btc, xmr)
 
-    if (btc || xmr) {
+    if (anyFiat(btc) || anyFiat(xmr)) {
       priceCache = { at: now, btc, xmr }
       return res.json({ btc, xmr })
     }

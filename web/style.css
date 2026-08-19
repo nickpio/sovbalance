@@ -1,9 +1,12 @@
 :root {
-    --bg: #0f1115;
-    --card: #1a1d23;
-    --text: #e6e6e6;
-    --border: #2c313a;
-    --accent: #3b82f6;
+    --bg: #000000;
+    --card: #111111;
+    --hover: #1a1a1a;
+    --text: #ffffff;
+    --muted: #a3a3a3;
+    --border: #2a2a2a;
+    --accent: #f7931a;
+    --accent-xmr: #ff6600;
 }
 
 body {
@@ -24,7 +27,7 @@ header {
     align-items: center;
     justify-content: space-between;
     padding: 0 40px;
-    background: #0f1115;
+    background: var(--bg);
     border-bottom: 1px solid var(--border);
     z-index: 10;
     user-select: none;
@@ -48,7 +51,7 @@ header h1 {
 
 .header-buttons {
     display: flex;
-    align-items: right;
+    align-items: center;
     gap: 12px;
 }
 
@@ -144,8 +147,22 @@ td {
 
 
 .sub-value {
-    font-size: 22px;
+    font-size: 18px;
     opacity: .88;
+    line-height: 1.35;
+    font-family: ui-monospace, monospace;
+}
+
+.big-value + .sub-value {
+    margin-top: 8px;
+}
+
+#totalBTC {
+    color: var(--accent);
+}
+
+#totalXMR {
+    color: var(--accent-xmr);
 }
 
 .side-value {
@@ -158,11 +175,11 @@ td {
     width: 54px;
     height: 54px;
     border-radius: 50%;
-    background: #5b7cff;
+    background: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: white;
+    color: #000000;
     flex-shrink: 0;
 }
 
@@ -188,19 +205,19 @@ tbody tr {
 }
 
 tbody tr:hover {
-    background: #232833;
+    background: var(--hover);
     transform: translateX(2px);
 }
 
 .chevron {
     text-align: right;
-    color: #6b7280;
+    color: var(--muted);
     font-size: 18px;
     width: 30px;
 }
 
 tbody tr:hover .chevron {
-    color: #9ca3af;
+    color: var(--text);
 }
 
 .btn {
@@ -213,15 +230,30 @@ tbody tr:hover .chevron {
 
 .btn-primary {
     background: var(--accent);
-    color: white;
+    color: #000000;
     border-radius: 10px;
     padding: 12px 18px;
     font-weight: 700;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
     transition: transform .12s ease, opacity .12s ease;
 }
 
 .btn-primary:hover {
+    opacity: .96;
+    transform: translateY(-1px);
+}
+
+.btn-secondary {
+    background: var(--hover);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+    font-weight: 700;
+    transition: transform .12s ease, opacity .12s ease;
+}
+
+.btn-secondary:hover {
     opacity: .96;
     transform: translateY(-1px);
 }
@@ -257,7 +289,7 @@ footer {
 
 .loading {
     text-align: center;
-    color: #6b7280;
+    color: var(--muted);
     padding: 20px;
 }
 
@@ -265,6 +297,26 @@ footer {
 
 .wallet-popup {
     width: 650px !important;
+}
+
+.settings-popup {
+    width: 480px !important;
+}
+
+.settings-section {
+    text-align: left;
+    margin: 18px 0 0;
+}
+
+.settings-section:first-child {
+    margin-top: 8px;
+}
+
+.settings-label {
+    font-size: 13px;
+    opacity: .62;
+    letter-spacing: .2px;
+    margin-bottom: 8px;
 }
 
 .swal2-input,
@@ -308,7 +360,7 @@ footer {
 
 .asset-tab {
     flex: 1;
-    background: #232833;
+    background: var(--hover);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -320,12 +372,13 @@ footer {
 .asset-tab.active {
     background: var(--accent);
     border-color: var(--accent);
-    color: white;
+    color: #000000;
 }
 
 .asset-tab[data-asset="xmr"].active {
-    background: #ff6600;
-    border-color: #ff6600;
+    background: var(--accent-xmr);
+    border-color: var(--accent-xmr);
+    color: #000000;
 }
 
 .coin-badge {
@@ -340,12 +393,12 @@ footer {
 
 .coin-badge.btc {
     background: rgba(247, 147, 26, .18);
-    color: #f7931a;
+    color: var(--accent);
 }
 
 .coin-badge.xmr {
     background: rgba(255, 102, 0, .18);
-    color: #ff6600;
+    color: var(--accent-xmr);
 }
 
 .wallet-error {
@@ -367,7 +420,7 @@ footer {
 .scanbar {
     width: 100%;
     height: 3px;
-    background: #1f2937;
+    background: var(--border);
     overflow: hidden;
     position: relative;
 }
@@ -377,7 +430,7 @@ footer {
     position: absolute;
     height: 100%;
     width: 40%;
-    background: #3b82f6;
+    background: var(--accent);
     animation: scanmove 1.2s linear infinite;
 }
 
@@ -397,7 +450,7 @@ footer {
 .donate-btn {
     background: none;
     border: none;
-    color: #aaffaa;
+    color: var(--accent);
     font: inherit;
     cursor: pointer;
     padding: 0;
@@ -415,7 +468,7 @@ footer {
 }
 
 .donate-btn:focus-visible {
-    outline: 1px solid #aaffaa;
+    outline: 1px solid var(--accent);
     outline-offset: 2px;
 }
 
@@ -493,10 +546,43 @@ footer {
         gap: 8px;
     }
 
-    .btn-primary {
+    .btn-primary,
+    .btn-secondary {
         padding: 10px 12px;
         font-size: 14px;
     }
 
 
+}
+
+.swal2-popup {
+    background: var(--card) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border);
+}
+
+.swal2-title,
+.swal2-html-container {
+    color: var(--text) !important;
+}
+
+.swal2-input,
+.swal2-textarea {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+}
+
+.swal2-styled.swal2-confirm {
+    background: var(--accent) !important;
+    color: #000000 !important;
+}
+
+.swal2-styled.swal2-cancel {
+    background: var(--hover) !important;
+    color: var(--text) !important;
+}
+
+.swal2-styled.swal2-deny {
+    background: #ef4444 !important;
 }
