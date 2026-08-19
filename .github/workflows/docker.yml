@@ -34,5 +34,5 @@ jobs:
           provenance: false
           sbom: false
           tags: |
-            ghcr.io/nickpio/sovbalance:${{ steps.meta.outputs.version }}
-            ghcr.io/nickpio/sovbalance:latest
+            ghcr.io/nickpio/sovbalance/app:${{ steps.meta.outputs.version }}
+            ghcr.io/nickpio/sovbalance/app:latest
