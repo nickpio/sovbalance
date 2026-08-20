@@ -18,6 +18,8 @@ services:
       ELECTRUM_PORT: $APP_ELECTRS_NODE_PORT
       WALLET_RPC_HOST: wallet_rpc
       WALLET_RPC_PORT: 18083
+      ZCASH_LWD_HOST: ${APP_ZCASH_NODE_IP:-}
+      ZCASH_LWD_PORT: ${APP_ZCASH_WALLET_PORT:-9067}
     volumes:
       - ${APP_DATA_DIR}/data:/data
 

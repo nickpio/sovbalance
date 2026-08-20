@@ -10,6 +10,7 @@ const bip32 = BIP32Factory(ecc);
 
 const { zpubToXpub, ypubToXpub } = require('./derive');
 const monero = require('./monero');
+const zcash = require('./zcash');
 
 
 const isDocker = fs.existsSync("/.dockerenv");
@@ -442,6 +443,19 @@ async function scanWallet(w) {
     return
   }
 
+  if (walletType(w) === "zec") {
+
+    try {
+      w.balance = await zcash.getWalletBalance(w)
+      delete w.error
+    } catch (e) {
+      console.error("Error scanning Zcash wallet:", e)
+      w.error = e.message
+    }
+
+    return
+  }
+
   w.balance = await getWalletBalance(w.xpub)
   delete w.error
 
@@ -458,7 +472,7 @@ app.get("/health", async (req, res) => {
 
 const PRICE_UA = "sovBalance/" + appVersion
 const emptyFiat = () => ({ USD: 0, CAD: 0 })
-let priceCache = { at: 0, btc: emptyFiat(), xmr: emptyFiat() }
+let priceCache = { at: 0, btc: emptyFiat(), xmr: emptyFiat(), zec: emptyFiat() }
 
 async function fetchJsonUrl(url, timeoutMs) {
   const r = await fetch(url, {
@@ -482,15 +496,19 @@ function mergeFiat(into, from) {
   return into
 }
 
-function fillFiatGap(btc, xmr) {
-  const usd = btc.USD || xmr.USD
-  const cad = btc.CAD || xmr.CAD
+function fillFiatGap(...coins) {
+  let usd = 0
+  let cad = 0
+  for (const c of coins) {
+    if (c.USD) usd = c.USD
+    if (c.CAD) cad = c.CAD
+  }
   if (!usd || !cad) return
   const rate = cad / usd
-  if (btc.USD && !btc.CAD) btc.CAD = btc.USD * rate
-  if (btc.CAD && !btc.USD) btc.USD = btc.CAD / rate
-  if (xmr.USD && !xmr.CAD) xmr.CAD = xmr.USD * rate
-  if (xmr.CAD && !xmr.USD) xmr.USD = xmr.CAD / rate
+  for (const c of coins) {
+    if (c.USD && !c.CAD) c.CAD = c.USD * rate
+    if (c.CAD && !c.USD) c.USD = c.CAD / rate
+  }
 }
 
 function krakenQuotes(data) {
@@ -554,26 +572,44 @@ async function fetchXmrPrices() {
   return prices
 }
 
+async function fetchZecPrices() {
+  const prices = emptyFiat()
+  try {
+    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=ZECUSD,ZECCAD", 5000)
+    mergeFiat(prices, krakenQuotes(data))
+    if (prices.USD && prices.CAD) return prices
+  } catch (e) {
+    console.error("ZEC price kraken:", e.message)
+  }
+  try {
+    const data = await fetchJsonUrl("https://api.coingecko.com/api/v3/simple/price?ids=zcash&vs_currencies=usd,cad", 5000)
+    mergeFiat(prices, geckoQuotes(data.zcash))
+  } catch (e) {
+    console.error("ZEC price coingecko:", e.message)
+  }
+  return prices
+}
+
 app.get("/prices", async (req, res) => {
   const now = Date.now()
 
-  if (now - priceCache.at < 60000 && (anyFiat(priceCache.btc) || anyFiat(priceCache.xmr))) {
-    return res.json({ btc: priceCache.btc, xmr: priceCache.xmr })
+  if (now - priceCache.at < 60000 && (anyFiat(priceCache.btc) || anyFiat(priceCache.xmr) || anyFiat(priceCache.zec))) {
+    return res.json({ btc: priceCache.btc, xmr: priceCache.xmr, zec: priceCache.zec })
   }
 
   try {
-    const [btc, xmr] = await Promise.all([fetchBtcPrices(), fetchXmrPrices()])
-    fillFiatGap(btc, xmr)
+    const [btc, xmr, zec] = await Promise.all([fetchBtcPrices(), fetchXmrPrices(), fetchZecPrices()])
+    fillFiatGap(btc, xmr, zec)
 
-    if (anyFiat(btc) || anyFiat(xmr)) {
-      priceCache = { at: now, btc, xmr }
-      return res.json({ btc, xmr })
+    if (anyFiat(btc) || anyFiat(xmr) || anyFiat(zec)) {
+      priceCache = { at: now, btc, xmr, zec }
+      return res.json({ btc, xmr, zec })
     }
   } catch (e) {
     console.error("price error:", e.message)
   }
 
-  res.json({ btc: priceCache.btc, xmr: priceCache.xmr })
+  res.json({ btc: priceCache.btc, xmr: priceCache.xmr, zec: priceCache.zec })
 });
 
 
@@ -633,7 +669,7 @@ app.post("/wallet", (req, res) => {
       return res.status(400).json({ error: e.message })
     }
 
-    if (wallets.some(w => w.address === info.address)) {
+    if (wallets.some(w => w.address === info.address && w.type === "xmr")) {
       return res.status(400).json({ error: "address already exists" })
     }
 
@@ -645,6 +681,29 @@ app.post("/wallet", (req, res) => {
       address: info.address,
       viewKey: info.viewKey,
       restoreHeight: info.restoreHeight,
+      balance: 0
+    })
+
+  } else if (type === "zec") {
+
+    let info
+
+    try {
+      info = zcash.validateZcashWallet(req.body)
+    } catch (e) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (wallets.some(w => w.address === info.address && w.type === "zec")) {
+      return res.status(400).json({ error: "address already exists" })
+    }
+
+    wallets.push({
+      id,
+      order,
+      wallet,
+      type: "zec",
+      address: info.address,
       balance: 0
     })
 
@@ -782,6 +841,23 @@ app.post("/wallet/update", (req, res) => {
     current.viewKey = info.viewKey
     current.restoreHeight = info.restoreHeight
 
+  } else if (walletType(current) === "zec") {
+
+    let info
+
+    try {
+      info = zcash.validateZcashWallet(req.body)
+    } catch (e) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (wallets.some(w => w.address === info.address && w.type === "zec" && w.id !== current.id)) {
+      return res.status(400).json({ error: "address already exists" })
+    }
+
+    current.wallet = wallet
+    current.address = info.address
+
   } else {
 
     const xpub = (req.body.xpub || "").trim()
@@ -831,6 +907,13 @@ async function start() {
     console.log(ok ? "Monero wallet-rpc connected" : "Monero wallet-rpc not reachable")
   } else {
     console.log("Monero wallet-rpc not configured")
+  }
+
+  if (zcash.isConfigured()) {
+    const ok = await zcash.ping()
+    console.log(ok ? "Zcash lightwalletd connected" : "Zcash lightwalletd not reachable")
+  } else {
+    console.log("Zcash lightwalletd not configured")
   }
 
   app.listen(appPort, () => {

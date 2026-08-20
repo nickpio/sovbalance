@@ -2,9 +2,11 @@ let chart
 let walletsCache = []
 var totalBTC = 0
 var totalXMR = 0
+var totalZEC = 0
 var totalFiat = 0
 var btcPrices = { USD: 0, CAD: 0 }
 var xmrPrices = { USD: 0, CAD: 0 }
+var zecPrices = { USD: 0, CAD: 0 }
 var lastPriceFetch = 0
 var fiatCurrency = localStorage.getItem("sovbalance-fiat") === "CAD" ? "CAD" : "USD"
 var btcUnit = ["btc", "mbtc", "sats"].includes(localStorage.getItem("sovbalance-btc-unit"))
@@ -13,6 +15,9 @@ var btcUnit = ["btc", "mbtc", "sats"].includes(localStorage.getItem("sovbalance-
 var xmrUnit = ["xmr", "piconero"].includes(localStorage.getItem("sovbalance-xmr-unit"))
     ? localStorage.getItem("sovbalance-xmr-unit")
     : "xmr"
+var zecUnit = ["zec", "zats"].includes(localStorage.getItem("sovbalance-zec-unit"))
+    ? localStorage.getItem("sovbalance-zec-unit")
+    : "zec"
 
 let scanCounter = 0
 let scanInterval
@@ -51,6 +56,14 @@ function formatXmrAmount(xmr) {
     return n.toFixed(6) + " XMR"
 }
 
+function formatZecAmount(zec) {
+    const n = Number(zec) || 0
+    if (zecUnit === "zats") {
+        return btcToSats(n).toLocaleString() + " zats"
+    }
+    return n.toFixed(8) + " ZEC"
+}
+
 function splitAmountLabel(text) {
     const i = String(text).lastIndexOf(" ")
     if (i < 0) return { value: text, unit: "" }
@@ -58,7 +71,9 @@ function splitAmountLabel(text) {
 }
 
 function walletAsset(w) {
-    return w.type === "xmr" ? "xmr" : "btc"
+    if (w.type === "xmr") return "xmr"
+    if (w.type === "zec") return "zec"
+    return "btc"
 }
 
 function fiatOf(prices) {
@@ -66,9 +81,10 @@ function fiatOf(prices) {
 }
 
 function walletFiat(w) {
-    return walletAsset(w) === "xmr"
-        ? w.balance * fiatOf(xmrPrices)
-        : w.balance * fiatOf(btcPrices)
+    const asset = walletAsset(w)
+    if (asset === "xmr") return w.balance * fiatOf(xmrPrices)
+    if (asset === "zec") return w.balance * fiatOf(zecPrices)
+    return w.balance * fiatOf(btcPrices)
 }
 
 function formatFiat(amount, digits = 2) {
@@ -76,15 +92,21 @@ function formatFiat(amount, digits = 2) {
 }
 
 function formatAmount(w) {
-    if (walletAsset(w) === "xmr") {
-        return formatXmrAmount(w.balance)
-    }
+    const asset = walletAsset(w)
+    if (asset === "xmr") return formatXmrAmount(w.balance)
+    if (asset === "zec") return formatZecAmount(w.balance)
     return formatBtcAmount(w.balance)
 }
 
 function amountTitle(w) {
-    if (walletAsset(w) === "xmr") {
+    const asset = walletAsset(w)
+    if (asset === "xmr") {
         return "View-only incoming balance. Spent outputs still count until key images are imported."
+    }
+    if (asset === "zec") {
+        return zecUnit === "zats"
+            ? Number(w.balance).toFixed(8) + " ZEC"
+            : btcToSats(w.balance).toLocaleString() + " zats"
     }
     if (btcUnit === "sats") {
         return Number(w.balance).toFixed(8) + " BTC"
@@ -132,7 +154,7 @@ async function loadPrices() {
 
     const now = Date.now()
 
-    if ((fiatOf(btcPrices) || fiatOf(xmrPrices)) && now - lastPriceFetch < 300000) {
+    if ((fiatOf(btcPrices) || fiatOf(xmrPrices) || fiatOf(zecPrices)) && now - lastPriceFetch < 300000) {
         return
     }
 
@@ -142,7 +164,8 @@ async function loadPrices() {
 
         btcPrices = readFiatMap(data.btc)
         xmrPrices = readFiatMap(data.xmr)
-        if (fiatOf(btcPrices) || fiatOf(xmrPrices)) {
+        zecPrices = readFiatMap(data.zec)
+        if (fiatOf(btcPrices) || fiatOf(xmrPrices) || fiatOf(zecPrices)) {
             lastPriceFetch = Date.now()
         }
 
@@ -158,30 +181,36 @@ function coinTotals(wallets) {
 
     let btc = 0
     let xmr = 0
+    let zec = 0
 
     for (const w of wallets) {
-        if (walletAsset(w) === "xmr") xmr += w.balance
+        const asset = walletAsset(w)
+        if (asset === "xmr") xmr += w.balance
+        else if (asset === "zec") zec += w.balance
         else btc += w.balance
     }
 
-    return { btc, xmr }
+    return { btc, xmr, zec }
 
 }
 
 function paintPrices() {
 
-    const { btc, xmr } = coinTotals(walletsCache)
+    const { btc, xmr, zec } = coinTotals(walletsCache)
     const btcPrice = fiatOf(btcPrices)
     const xmrPrice = fiatOf(xmrPrices)
-    const fiat = btc * btcPrice + xmr * xmrPrice
+    const zecPrice = fiatOf(zecPrices)
+    const fiat = btc * btcPrice + xmr * xmrPrice + zec * zecPrice
 
     totalBTC = btc
     totalXMR = xmr
+    totalZEC = zec
     totalFiat = fiat
 
     document.getElementById("totalTop").innerText = formatFiat(fiat) + " " + fiatCurrency
     document.getElementById("totalBTC").innerText = formatBtcAmount(btc)
     document.getElementById("totalXMR").innerText = formatXmrAmount(xmr)
+    document.getElementById("totalZEC").innerText = formatZecAmount(zec)
 
     document.getElementById("btcPrice").innerText = btcPrice
         ? "1 BTC = " + formatFiat(btcPrice) + " " + fiatCurrency
@@ -189,6 +218,10 @@ function paintPrices() {
 
     document.getElementById("xmrPrice").innerText = xmrPrice
         ? "1 XMR = " + formatFiat(xmrPrice) + " " + fiatCurrency
+        : ""
+
+    document.getElementById("zecPrice").innerText = zecPrice
+        ? "1 ZEC = " + formatFiat(zecPrice) + " " + fiatCurrency
         : ""
 
     if (lastPriceFetch && !scanning) {
@@ -228,11 +261,20 @@ function setXmrUnit(next) {
     applyDisplay()
 }
 
+function setZecUnit(next) {
+    if (next !== "zec" && next !== "zats") return
+    if (next === zecUnit) return
+    zecUnit = next
+    localStorage.setItem("sovbalance-zec-unit", next)
+    applyDisplay()
+}
+
 function syncSettingsTabs() {
     document.querySelectorAll("[data-setting]").forEach(btn => {
         const on = (btn.dataset.setting === "fiat" && btn.dataset.value === fiatCurrency)
             || (btn.dataset.setting === "btcUnit" && btn.dataset.value === btcUnit)
             || (btn.dataset.setting === "xmrUnit" && btn.dataset.value === xmrUnit)
+            || (btn.dataset.setting === "zecUnit" && btn.dataset.value === zecUnit)
         btn.classList.toggle("active", on)
     })
 }
@@ -265,6 +307,13 @@ function openSettings() {
     <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="piconero">piconeros</button>
   </div>
 </div>
+<div class="settings-section">
+  <div class="settings-label">Zcash amounts</div>
+  <div class="asset-tabs">
+    <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zec">ZEC</button>
+    <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zats">zats</button>
+  </div>
+</div>
 `,
         willOpen: () => {
             syncSettingsTabs()
@@ -273,6 +322,7 @@ function openSettings() {
                     if (btn.dataset.setting === "fiat") setFiat(btn.dataset.value)
                     else if (btn.dataset.setting === "btcUnit") setBtcUnit(btn.dataset.value)
                     else if (btn.dataset.setting === "xmrUnit") setXmrUnit(btn.dataset.value)
+                    else if (btn.dataset.setting === "zecUnit") setZecUnit(btn.dataset.value)
                     syncSettingsTabs()
                 })
             })
@@ -356,7 +406,7 @@ function renderWallets(wallets) {
         return
     }
 
-    const mixed = wallets.some(w => walletAsset(w) === "xmr") && wallets.some(w => walletAsset(w) === "btc")
+    const mixed = new Set(wallets.map(walletAsset)).size > 1
     const useFiat = mixed && totalFiat > 0
 
     let rows = ""
@@ -371,7 +421,9 @@ function renderWallets(wallets) {
             ? (totalFiat > 0 ? (fiat / totalFiat) * 100 : 0)
             : asset === "xmr"
                 ? (totalXMR > 0 ? (w.balance / totalXMR) * 100 : 0)
-                : (totalBTC > 0 ? (w.balance / totalBTC) * 100 : 0)
+                : asset === "zec"
+                    ? (totalZEC > 0 ? (w.balance / totalZEC) * 100 : 0)
+                    : (totalBTC > 0 ? (w.balance / totalBTC) * 100 : 0)
 
         const perc = share.toFixed(1)
 
@@ -453,6 +505,7 @@ function clearTable() {
     document.getElementById("totalTop").innerText = "-"
     document.getElementById("totalBTC").innerText = ""
     document.getElementById("totalXMR").innerText = ""
+    document.getElementById("totalZEC").innerText = ""
     if (chart) chart.destroy()
 }
 
@@ -549,6 +602,7 @@ function renderChart(labels, data, useFiat = false) {
                 backgroundColor: [
                     "#f7931a",
                     "#ff6600",
+                    "#f4b728",
                     "#ffffff",
                     "#c2410c",
                     "#fdba74",
@@ -606,7 +660,9 @@ function renderChart(labels, data, useFiat = false) {
                                 ? (totalFiat > 0 ? ((ctx.raw / totalFiat) * 100).toFixed(2) : "0.00")
                                 : walletAsset(wallet) === "xmr"
                                     ? (totalXMR > 0 ? ((wallet.balance / totalXMR) * 100).toFixed(2) : "0.00")
-                                    : (totalBTC > 0 ? ((wallet.balance / totalBTC) * 100).toFixed(2) : "0.00")
+                                    : walletAsset(wallet) === "zec"
+                                        ? (totalZEC > 0 ? ((wallet.balance / totalZEC) * 100).toFixed(2) : "0.00")
+                                        : (totalBTC > 0 ? ((wallet.balance / totalBTC) * 100).toFixed(2) : "0.00")
 
                             if (useFiat) {
                                 return `${perc}%   •   ${formatAmount(wallet)}   •   ${formatFiat(ctx.raw)} ${fiatCurrency}`
@@ -680,6 +736,7 @@ async function openWalletModal() {
 <div class="asset-tabs">
   <button type="button" class="asset-tab active" data-asset="btc">Bitcoin</button>
   <button type="button" class="asset-tab" data-asset="xmr">Monero</button>
+  <button type="button" class="asset-tab" data-asset="zec">Zcash</button>
 </div>
 
 <input id="swal-wallet" class="swal2-input" placeholder="Wallet Name" maxlength="45">
@@ -710,6 +767,16 @@ spellcheck="false"></textarea>
 <input id="swal-restore" class="swal2-input" placeholder="Restore height (0 = genesis)" inputmode="numeric">
 <div class="wallet-hint">View-only wallets can see received outputs, including subaddresses. Spent funds still count until you import key images from the spend wallet (Edit Wallet after a spend). Use a restore height from around when the wallet was created to avoid a full-chain scan.</div>
 </div>
+
+<div id="zec-fields" style="display:none">
+<textarea id="swal-zec-address"
+class="swal2-textarea"
+rows="2"
+maxlength="35"
+placeholder="Transparent address (t1… or t3…)"
+spellcheck="false"></textarea>
+<div class="wallet-hint">Requires the Zcash Node app. Transparent mainnet addresses only (t1 or t3). Shielded viewing keys are not supported yet.</div>
+</div>
 `,
 
         showCancelButton: true,
@@ -722,9 +789,11 @@ spellcheck="false"></textarea>
             const addressInput = document.getElementById("swal-address")
             const viewKeyInput = document.getElementById("swal-viewkey")
             const restoreInput = document.getElementById("swal-restore")
+            const zecAddressInput = document.getElementById("swal-zec-address")
             const label = document.getElementById("wallet-type")
             const btcFields = document.getElementById("btc-fields")
             const xmrFields = document.getElementById("xmr-fields")
+            const zecFields = document.getElementById("zec-fields")
             const tabs = document.querySelectorAll(".asset-tab")
             const btn = Swal.getConfirmButton()
 
@@ -735,6 +804,7 @@ spellcheck="false"></textarea>
                 asset = next
                 btcFields.style.display = asset === "btc" ? "" : "none"
                 xmrFields.style.display = asset === "xmr" ? "" : "none"
+                zecFields.style.display = asset === "zec" ? "" : "none"
                 tabs.forEach(tab => tab.classList.toggle("active", tab.dataset.asset === asset))
                 validate()
             }
@@ -742,6 +812,12 @@ spellcheck="false"></textarea>
             function validate() {
 
                 const wallet = cleanInput(walletInput.value)
+
+                if (asset === "zec") {
+                    const address = zecAddressInput.value.trim()
+                    btn.disabled = !(wallet && /^(t1|t3)[1-9A-HJ-NP-Za-km-z]{33}$/.test(address))
+                    return
+                }
 
                 if (asset === "xmr") {
                     const address = addressInput.value.trim()
@@ -774,6 +850,7 @@ spellcheck="false"></textarea>
             addressInput.addEventListener("input", validate)
             viewKeyInput.addEventListener("input", validate)
             restoreInput.addEventListener("input", validate)
+            zecAddressInput.addEventListener("input", validate)
 
             xpubInput.addEventListener("input", () => {
 
@@ -807,7 +884,8 @@ spellcheck="false"></textarea>
                 xpub: document.getElementById("swal-xpub").value.trim(),
                 address: document.getElementById("swal-address").value.trim(),
                 viewKey: document.getElementById("swal-viewkey").value.trim(),
-                restoreHeight: document.getElementById("swal-restore").value.trim() || 0
+                restoreHeight: document.getElementById("swal-restore").value.trim() || 0,
+                zecAddress: document.getElementById("swal-zec-address").value.trim()
             }
         }
 
@@ -815,7 +893,7 @@ spellcheck="false"></textarea>
 
     if (!result.isConfirmed) return
 
-    const { type, wallet, xpub, address, viewKey, restoreHeight } = result.value
+    const { type, wallet, xpub, address, viewKey, restoreHeight, zecAddress } = result.value
 
     let ok = false
 
@@ -826,6 +904,12 @@ spellcheck="false"></textarea>
             address,
             viewKey,
             restoreHeight
+        })
+    } else if (type === "zec") {
+        ok = await saveWalletRequest("/wallet", {
+            wallet,
+            type: "zec",
+            address: zecAddress
         })
     } else {
         ok = await saveWalletRequest("/wallet", {
@@ -846,6 +930,7 @@ async function editWallet(id) {
     if (!wallet) return
 
     const isXmr = walletAsset(wallet) === "xmr"
+    const isZec = walletAsset(wallet) === "zec"
 
     const result = await Swal.fire({
 
@@ -861,6 +946,10 @@ async function editWallet(id) {
 <div class="wallet-hint">After you spend, export key images from the wallet that has the spend key (Monero GUI: Settings → Wallet → Export key images; Feather: File → Export → Key images) and attach that file here. Incoming funds do not need this.</div>
 <input id="swal-keyimages" class="keyimages-file" type="file">
 <textarea id="swal-keyimages-text" class="swal2-textarea" rows="3" placeholder="Or paste key images JSON" spellcheck="false"></textarea>
+` : isZec ? `
+<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
+<textarea id="swal-address" class="swal2-textarea" rows="2" maxlength="35">${wallet.address || ""}</textarea>
+<div class="wallet-hint">Transparent mainnet address (t1 or t3). Requires the Zcash Node app.</div>
 ` : `
 <input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-xpub" class="swal2-textarea" rows="2">${wallet.xpub || ""}</textarea>
@@ -874,6 +963,13 @@ async function editWallet(id) {
         denyButtonColor: "#ef4444",
 
         preConfirm: async () => {
+            if (isZec) {
+                return {
+                    wallet: cleanInput(document.getElementById("swal-wallet").value),
+                    address: document.getElementById("swal-address").value.trim()
+                }
+            }
+
             if (isXmr) {
                 const file = document.getElementById("swal-keyimages").files[0]
                 let fileBase64 = ""
@@ -975,6 +1071,20 @@ async function editWallet(id) {
         return
     }
 
+    if (isZec) {
+        const { wallet: newWallet, address } = result.value
+        const ok = await saveWalletRequest("/wallet/update", {
+            id: wallet.id,
+            wallet: newWallet,
+            address
+        })
+
+        if (!ok) return
+
+        load(address !== wallet.address)
+        return
+    }
+
     const { wallet: newWallet, xpub: newXpub } = result.value
 
     const ok = await saveWalletRequest("/wallet/update", {
@@ -1028,10 +1138,16 @@ const centerText = {
             ctx.fillStyle = "#a3a3a3"
             ctx.font = "400 14px system-ui"
             ctx.fillText(fiatCurrency, x, y + 14)
-        } else if (totalXMR && !totalBTC) {
+        } else if (totalXMR && !totalBTC && !totalZEC) {
             const { value, unit } = splitAmountLabel(formatXmrAmount(totalXMR))
             ctx.fillText(value, x, y - 8)
             ctx.fillStyle = "#ff6600"
+            ctx.font = "400 14px system-ui"
+            ctx.fillText(unit, x, y + 14)
+        } else if (totalZEC && !totalBTC && !totalXMR) {
+            const { value, unit } = splitAmountLabel(formatZecAmount(totalZEC))
+            ctx.fillText(value, x, y - 8)
+            ctx.fillStyle = "#f4b728"
             ctx.font = "400 14px system-ui"
             ctx.fillText(unit, x, y + 14)
         } else {

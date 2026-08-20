@@ -6,28 +6,28 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <meta name="description" content="Monitor Bitcoin XPUB and Monero view-only wallet balances using your own node">
+  <meta name="description" content="Monitor Bitcoin, Monero, and Zcash wallet balances using your own node">
   <meta name="application-name" content="sovBalance">
   <meta name="author" content="nickpio">
 
-  <title>sovBalance 1.2.1</title>
+  <title>sovBalance 1.3.0</title>
 
-  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="icon" type="image/png" href="/icon.png?v=21">
   <meta name="theme-color" content="#000000">
 
-  <link rel="stylesheet" href="/style.css?v=18">
+  <link rel="stylesheet" href="/style.css?v=20">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-  <script src="/scripts.js?v=18"></script>
+  <script src="/scripts.js?v=20"></script>
 </head>
 
 <body>
 
   <header>
     <div class="logo-title">
-      <img src="/logo.png" alt="sovBalance Logo" class="logo" style="width: 50px; height: 50px;" />
+      <img src="/logo.png?v=21" alt="sovBalance Logo" class="logo" style="width: 35px; height: 35px;" />
       <h1>sovBalance <span id="app_version"></span></h1>
       
     </div>
@@ -49,6 +49,7 @@
         <div id="totalTop" class="big-value">-</div>
         <div id="totalBTC" class="sub-value"></div>
         <div id="totalXMR" class="sub-value"></div>
+        <div id="totalZEC" class="sub-value"></div>
       </div>
 
       <div class="metric side-metric">
@@ -64,6 +65,7 @@
           <div class="label">Prices</div>
           <div id="btcPrice" class="side-value"></div>
           <div id="xmrPrice" class="side-value"></div>
+          <div id="zecPrice" class="side-value"></div>
         </div>
       </div>
 

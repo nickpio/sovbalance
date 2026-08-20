@@ -1,16 +1,17 @@
 ![Bitcoin](https://img.shields.io/badge/Bitcoin-self--hosted-orange)
 ![Monero](https://img.shields.io/badge/Monero-view--only-brightgreen)
+![Zcash](https://img.shields.io/badge/Zcash-transparent-yellow)
 ![Umbrel](https://img.shields.io/badge/Runs%20on-Umbrel-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
  
 # sovBalance
 <img src="./web/logo.png">
 
-Track your Bitcoin and Monero wallets privately from your own Umbrel.
+Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
 
-A simple and private **wallet balance tracker** for Bitcoin XPUB / YPUB / ZPUB and Monero view-only wallets.
+A simple and private **wallet balance tracker** for Bitcoin XPUB / YPUB / ZPUB, Monero view-only wallets, and Zcash transparent addresses.
 
-sovBalance allows you to monitor multiple wallets using **your own Electrs** and, for Monero, **your own Monero Node**, without relying on third-party balance APIs.
+sovBalance allows you to monitor multiple wallets using **your own Electrs**, and optionally **your own Monero Node** and **Zcash Node**, without relying on third-party balance APIs.
 
 Runs locally on **Umbrel** and keeps all wallet data private.
 
@@ -30,12 +31,13 @@ sovBalance avoids this by connecting **only to your own node**.
 
 Bitcoin: XPUB / YPUB / ZPUB  
 Monero: primary address + private view key  
+Zcash: transparent t1 / t3 address  
 ↓  
 sovBalance  
 ↓  
-Electrs / local wallet-rpc  
+Electrs / local wallet-rpc / lightwalletd  
 ↓  
-Bitcoin Core / Monero Node  
+Bitcoin Core / Monero Node / Zcash Node  
 
 Your wallet data never leaves your infrastructure.
 
@@ -43,11 +45,12 @@ Your wallet data never leaves your infrastructure.
 
 ## Features
 
-- Track multiple Bitcoin and Monero wallets
+- Track multiple Bitcoin, Monero, and Zcash wallets
 - Bitcoin: **XPUB, YPUB and ZPUB**
 - Monero: **view-only** wallets (primary address + private view key)
+- Zcash: **transparent** mainnet addresses (`t1` / `t3`)
 - Import Monero **key images** after spending so spent outputs drop from the balance
-- Connects to your **local Electrs** app, and to **Monero Node** when it is installed
+- Connects to your **local Electrs** app, and to **Monero Node** or **Zcash Node** when those apps are installed
 - Combined USD total with per-asset amounts
 - No third-party balance APIs
 - Fully self-hosted
@@ -76,6 +79,14 @@ Addresses are derived locally and scanned against Electrs with a gap limit of 20
 
 View-only wallets can see received outputs, including subaddresses. Spent funds still count toward the balance until key images are imported. Set a restore height from around when the wallet was created to avoid a full-chain scan.
 
+### Zcash
+
+| Type | What you enter |
+|-----|------|
+| Transparent | Mainnet `t1` or `t3` address (35 characters) |
+
+Balances come from your Zcash Node's lightwalletd. Shielded viewing keys (`uview1…`) are not supported yet.
+
 ---
 
 ## Key images
@@ -98,6 +109,7 @@ Incoming funds do not need this. Re-export and import again after each spend. Th
 - Umbrel
 - Electrs installed
 - [Monero Node](https://apps.umbrel.com/app/monero) installed only if you track Monero wallets
+- [Zcash Node](https://github.com/nickpio/umbrel-zcash) installed only if you track Zcash wallets
 
 ---
 
@@ -105,7 +117,7 @@ Incoming funds do not need this. Re-export and import again after each spend. Th
 
 Install **sovBalance** directly from the Umbrel App Store.
 
-After installation the app will automatically connect to your **Electrs** app. Install **Monero Node** and restart sovBalance if you want to track Monero wallets.
+After installation the app will automatically connect to your **Electrs** app. Install **Monero Node** and/or **Zcash Node** and restart sovBalance if you want to track those wallets.
 
 ---
 
@@ -113,10 +125,11 @@ After installation the app will automatically connect to your **Electrs** app. I
 
 1. Open sovBalance
 2. Click **Add Wallet**
-3. Choose **Bitcoin** or **Monero**
+3. Choose **Bitcoin**, **Monero**, or **Zcash**
 4. Enter a wallet name
 5. Bitcoin: paste an **XPUB / YPUB / ZPUB**  
-   Monero: paste a **primary address**, **private view key**, and optional **restore height**
+   Monero: paste a **primary address**, **private view key**, and optional **restore height**  
+   Zcash: paste a transparent **t1 / t3** address
 
 The wallet balance will be tracked automatically.
 
@@ -131,7 +144,7 @@ sovBalance is designed with privacy in mind.
 - No third-party balance APIs
 - No analytics
 - No external wallet queries
-- Bitcoin xpubs and Monero view keys stay on your node
+- Bitcoin xpubs, Monero view keys, and Zcash addresses stay on your node
 - Spend keys are never required
 - Everything runs locally on your node
 
@@ -141,7 +154,7 @@ USD display prices may be fetched from public price APIs. Wallet keys and balanc
 
 ## Architecture
 
-Bitcoin wallets are derived locally and queried through Electrs. Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node.
+Bitcoin wallets are derived locally and queried through Electrs. Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node. Zcash transparent balances are queried from your Zcash Node's lightwalletd.
 
 XPUB / YPUB / ZPUB  
 ↓ (local derivation)  
@@ -157,6 +170,12 @@ wallet-rpc
 ↓  
 Monero Node  
 
+Transparent t1 / t3 address  
+↓ (gRPC)  
+lightwalletd  
+↓  
+Zcash Node  
+
 No external services are involved in balance scanning.
 
 All balance calculations are deterministic and based solely on your node’s data.
@@ -169,11 +188,12 @@ This app is designed to run inside Umbrel’s managed environment.
 
 - Uses the built-in Electrs service via `$APP_ELECTRS_NODE_IP`
 - Uses the Monero Node app via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed
+- Uses the Zcash Node app via `$APP_ZCASH_NODE_IP` and `$APP_ZCASH_WALLET_PORT` when that app is installed
 - Runs a local `simple-monero-wallet-rpc` sidecar for view-only scanning
 - Does not define custom Docker networks (Umbrel handles service networking)
 - Persists app state in `${APP_DATA_DIR}/data`
 - Persists Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
-- Depends on the `electrs` Umbrel app. Monero Node is optional
+- Depends on the `electrs` Umbrel app. Monero Node and Zcash Node are optional
 
 These constraints ensure compatibility with Umbrel’s runtime and predictable behavior across installations.
 
