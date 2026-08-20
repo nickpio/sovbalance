@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track your Bitcoin and Monero wallets privately from your own Umbrel
 category: bitcoin
-version: "1.2.0"
+version: "1.2.1"
 port: 3710
 description: >-
   Track your Bitcoin and Monero wallets privately from your own Umbrel.
@@ -34,7 +34,7 @@ dependencies:
   - monero
 gallery: []
 releaseNotes: >-
-  Adds a settings menu with USD/CAD prices and Bitcoin/Monero display
-  units (BTC, mBTC, sats, XMR, piconeros). Totals show fiat first, then
-  each coin. Orange, black, and white theme. Stops Electrum reconnects
-  from exhausting memory when Electrs is unreachable.
+  Fixes Monero wallet scans failing with "failed to save file ...keys"
+  on Umbrel bind mounts. wallet-rpc now runs as root so it can write
+  wallet files, and opening an existing view-only wallet no longer
+  tries to recreate it.

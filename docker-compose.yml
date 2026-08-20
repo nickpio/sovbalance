@@ -25,6 +25,9 @@ services:
     image: ghcr.io/sethforprivacy/simple-monero-wallet-rpc:v0.18.5.1@sha256:8f3fe0fd8f43b845c434c3936ef3808f411d4f0826c0536a68a2d9bf0866c557
     restart: on-failure
     stop_grace_period: 1m
+    # Image USER is monero. Umbrel bind-mounts are often root:root 755, so
+    # run as root like the app container or generate_from_keys cannot write.
+    user: "0:0"
     command:
       - --wallet-dir=/home/monero/wallet
       - --rpc-bind-port=18083

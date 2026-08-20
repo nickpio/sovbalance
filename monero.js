@@ -138,26 +138,53 @@ async function ping() {
 }
 
 
+async function closeWallet() {
+
+  try {
+    await rpc("close_wallet", { autosave_current: false })
+  } catch { }
+
+}
+
+
 async function openOrCreate(wallet) {
 
   const filename = walletFilename(wallet)
 
+  await closeWallet()
+
   try {
     await rpc("open_wallet", { filename, password: "" })
     return
-  } catch {
-    // create a view-only wallet when no local file exists yet
+  } catch (openErr) {
+    const msg = String(openErr.message || "")
+    if (/already (open|opened)/i.test(msg)) {
+      return
+    }
   }
 
-  await rpc("generate_from_keys", {
-    filename,
-    address: wallet.address,
-    viewkey: wallet.viewKey,
-    password: "",
-    restore_height: wallet.restoreHeight || 0,
-    autosave_current: true,
-    language: "English"
-  }, 120000)
+  try {
+    await rpc("generate_from_keys", {
+      filename,
+      address: wallet.address,
+      viewkey: wallet.viewKey,
+      password: "",
+      restore_height: wallet.restoreHeight || 0,
+      autosave_current: false,
+      language: "English"
+    }, 120000)
+  } catch (createErr) {
+    try {
+      await rpc("open_wallet", { filename, password: "" })
+      return
+    } catch {
+      const msg = String(createErr.message || "")
+      if (/failed to save file/i.test(msg)) {
+        throw new Error("Could not write Monero wallet files. The wallet-rpc data directory is not writable.")
+      }
+      throw createErr
+    }
+  }
 
 }
 

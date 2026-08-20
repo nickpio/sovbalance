@@ -1,6 +1,6 @@
 {
   "name": "bitbalance",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Bitcoin and Monero balance monitor (XPUB / YPUB / ZPUB / view-only)",
   "main": "server.js",
   "type": "commonjs",
