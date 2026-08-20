@@ -33,8 +33,8 @@ services:
       - --rpc-bind-port=18083
       - --disable-rpc-login
       - --trusted-daemon
-      - --daemon-host=${APP_MONERO_NODE_IP}
-      - --daemon-port=${APP_MONERO_RPC_PORT}
-      - "--daemon-login=${APP_MONERO_RPC_USER}:${APP_MONERO_RPC_PASS}"
+      - --daemon-host=${APP_MONERO_NODE_IP:-10.21.21.179}
+      - --daemon-port=${APP_MONERO_RPC_PORT:-18081}
+      - "--daemon-login=${APP_MONERO_RPC_USER:-monero}:${APP_MONERO_RPC_PASS:-x}"
     volumes:
       - ${APP_DATA_DIR}/monero-wallets:/home/monero/wallet

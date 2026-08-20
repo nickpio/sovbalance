@@ -10,7 +10,7 @@ Track your Bitcoin and Monero wallets privately from your own Umbrel.
 
 A simple and private **wallet balance tracker** for Bitcoin XPUB / YPUB / ZPUB and Monero view-only wallets.
 
-sovBalance allows you to monitor multiple wallets using **your own Electrs and Monero Node**, without relying on third-party balance APIs.
+sovBalance allows you to monitor multiple wallets using **your own Electrs** and, for Monero, **your own Monero Node**, without relying on third-party balance APIs.
 
 Runs locally on **Umbrel** and keeps all wallet data private.
 
@@ -47,7 +47,7 @@ Your wallet data never leaves your infrastructure.
 - Bitcoin: **XPUB, YPUB and ZPUB**
 - Monero: **view-only** wallets (primary address + private view key)
 - Import Monero **key images** after spending so spent outputs drop from the balance
-- Connects to your **local Electrs** and **Monero Node** apps
+- Connects to your **local Electrs** app, and to **Monero Node** when it is installed
 - Combined USD total with per-asset amounts
 - No third-party balance APIs
 - Fully self-hosted
@@ -97,7 +97,7 @@ Incoming funds do not need this. Re-export and import again after each spend. Th
 
 - Umbrel
 - Electrs installed
-- [Monero Node](https://apps.umbrel.com/app/monero) installed (for Monero wallets)
+- [Monero Node](https://apps.umbrel.com/app/monero) installed only if you track Monero wallets
 
 ---
 
@@ -105,7 +105,7 @@ Incoming funds do not need this. Re-export and import again after each spend. Th
 
 Install **sovBalance** directly from the Umbrel App Store.
 
-After installation the app will automatically connect to your **Electrs** and **Monero Node** apps.
+After installation the app will automatically connect to your **Electrs** app. Install **Monero Node** and restart sovBalance if you want to track Monero wallets.
 
 ---
 
@@ -168,12 +168,12 @@ All balance calculations are deterministic and based solely on your node’s dat
 This app is designed to run inside Umbrel’s managed environment.
 
 - Uses the built-in Electrs service via `$APP_ELECTRS_NODE_IP`
-- Uses the Monero Node app via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS`
+- Uses the Monero Node app via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed
 - Runs a local `simple-monero-wallet-rpc` sidecar for view-only scanning
 - Does not define custom Docker networks (Umbrel handles service networking)
 - Persists app state in `${APP_DATA_DIR}/data`
 - Persists Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
-- Depends on the `electrs` and `monero` Umbrel apps
+- Depends on the `electrs` Umbrel app. Monero Node is optional
 
 These constraints ensure compatibility with Umbrel’s runtime and predictable behavior across installations.
 
