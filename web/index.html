@@ -15,12 +15,12 @@
   <link rel="icon" type="image/png" href="/icon.png?v=21">
   <meta name="theme-color" content="#000000">
 
-  <link rel="stylesheet" href="/style.css?v=20">
+  <link rel="stylesheet" href="/style.css?v=24">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-  <script src="/scripts.js?v=20"></script>
+  <script src="/scripts.js?v=24"></script>
 </head>
 
 <body>
@@ -47,9 +47,11 @@
       <div class="metric main-metric">
         <div class="label">Total Balance</div>
         <div id="totalTop" class="big-value">-</div>
-        <div id="totalBTC" class="sub-value"></div>
-        <div id="totalXMR" class="sub-value"></div>
-        <div id="totalZEC" class="sub-value"></div>
+        <div class="coin-totals">
+          <div id="totalBTC" class="sub-value"></div>
+          <div id="totalXMR" class="sub-value"></div>
+          <div id="totalZEC" class="sub-value"></div>
+        </div>
       </div>
 
       <div class="metric side-metric">
@@ -63,9 +65,18 @@
 
         <div>
           <div class="label">Prices</div>
-          <div id="btcPrice" class="side-value"></div>
-          <div id="xmrPrice" class="side-value"></div>
-          <div id="zecPrice" class="side-value"></div>
+          <div id="btcPrice" class="side-value price-line" hidden>
+            <img class="price-symbol" src="/symbols/btc.png" alt="BTC">
+            <span class="price-fiat"></span>
+          </div>
+          <div id="xmrPrice" class="side-value price-line" hidden>
+            <img class="price-symbol" src="/symbols/xmr.svg" alt="XMR">
+            <span class="price-fiat"></span>
+          </div>
+          <div id="zecPrice" class="side-value price-line" hidden>
+            <img class="price-symbol" src="/symbols/zec.png" alt="ZEC">
+            <span class="price-fiat"></span>
+          </div>
         </div>
       </div>
 

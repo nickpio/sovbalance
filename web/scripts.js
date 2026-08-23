@@ -18,6 +18,36 @@ var xmrUnit = ["xmr", "piconero"].includes(localStorage.getItem("sovbalance-xmr-
 var zecUnit = ["zec", "zats"].includes(localStorage.getItem("sovbalance-zec-unit"))
     ? localStorage.getItem("sovbalance-zec-unit")
     : "zec"
+const ASSETS = ["btc", "xmr", "zec"]
+const ASSET_NAMES = { btc: "Bitcoin", xmr: "Monero", zec: "Zcash" }
+var enabledAssets = loadAssetFlags("sovbalance-assets", false)
+
+function loadAssetFlags(key, allowEmpty) {
+    const fallback = { btc: true, xmr: true, zec: true }
+    try {
+        const raw = localStorage.getItem(key)
+        if (!raw) return fallback
+        const parsed = JSON.parse(raw)
+        const enabled = new Set(
+            Array.isArray(parsed)
+                ? parsed
+                : Object.keys(parsed || {}).filter(k => parsed[k])
+        )
+        const next = {
+            btc: enabled.has("btc"),
+            xmr: enabled.has("xmr"),
+            zec: enabled.has("zec")
+        }
+        if (!allowEmpty && !next.btc && !next.xmr && !next.zec) return fallback
+        return next
+    } catch (e) {
+        return fallback
+    }
+}
+
+function saveAssetFlags(key, flags) {
+    localStorage.setItem(key, JSON.stringify(ASSETS.filter(asset => flags[asset])))
+}
 
 let scanCounter = 0
 let scanInterval
@@ -74,6 +104,18 @@ function walletAsset(w) {
     if (w.type === "xmr") return "xmr"
     if (w.type === "zec") return "zec"
     return "btc"
+}
+
+function assetEnabled(asset) {
+    return !!enabledAssets[asset]
+}
+
+function enabledAssetList() {
+    return ASSETS.filter(assetEnabled)
+}
+
+function visibleWallets(wallets = walletsCache) {
+    return wallets.filter(w => assetEnabled(walletAsset(w)))
 }
 
 function fiatOf(prices) {
@@ -185,6 +227,7 @@ function coinTotals(wallets) {
 
     for (const w of wallets) {
         const asset = walletAsset(w)
+        if (!assetEnabled(asset)) continue
         if (asset === "xmr") xmr += w.balance
         else if (asset === "zec") zec += w.balance
         else btc += w.balance
@@ -208,26 +251,38 @@ function paintPrices() {
     totalFiat = fiat
 
     document.getElementById("totalTop").innerText = formatFiat(fiat) + " " + fiatCurrency
-    document.getElementById("totalBTC").innerText = formatBtcAmount(btc)
-    document.getElementById("totalXMR").innerText = formatXmrAmount(xmr)
-    document.getElementById("totalZEC").innerText = formatZecAmount(zec)
+    setLine("totalBTC", assetEnabled("btc"), formatBtcAmount(btc))
+    setLine("totalXMR", assetEnabled("xmr"), formatXmrAmount(xmr))
+    setLine("totalZEC", assetEnabled("zec"), formatZecAmount(zec))
 
-    document.getElementById("btcPrice").innerText = btcPrice
-        ? "1 BTC = " + formatFiat(btcPrice) + " " + fiatCurrency
-        : ""
+    setPriceLine("btcPrice", assetEnabled("btc") && !!btcPrice,
+        formatFiat(btcPrice) + " " + fiatCurrency)
 
-    document.getElementById("xmrPrice").innerText = xmrPrice
-        ? "1 XMR = " + formatFiat(xmrPrice) + " " + fiatCurrency
-        : ""
+    setPriceLine("xmrPrice", assetEnabled("xmr") && !!xmrPrice,
+        formatFiat(xmrPrice) + " " + fiatCurrency)
 
-    document.getElementById("zecPrice").innerText = zecPrice
-        ? "1 ZEC = " + formatFiat(zecPrice) + " " + fiatCurrency
-        : ""
+    setPriceLine("zecPrice", assetEnabled("zec") && !!zecPrice,
+        formatFiat(zecPrice) + " " + fiatCurrency)
 
     if (lastPriceFetch && !scanning) {
         document.getElementById("lastUpdated").innerText = new Date(lastPriceFetch).toLocaleTimeString()
     }
 
+}
+
+function setLine(id, show, text) {
+    const el = document.getElementById(id)
+    if (!el) return
+    el.innerText = show ? text : ""
+    el.hidden = !show
+}
+
+function setPriceLine(id, show, text) {
+    const el = document.getElementById(id)
+    if (!el) return
+    const fiat = el.querySelector(".price-fiat")
+    if (fiat) fiat.textContent = show ? "= " + text : ""
+    el.hidden = !show
 }
 
 function applyDisplay() {
@@ -269,13 +324,26 @@ function setZecUnit(next) {
     applyDisplay()
 }
 
+function toggleAsset(asset) {
+    if (!ASSETS.includes(asset)) return
+    if (enabledAssets[asset] && enabledAssetList().length === 1) return
+    enabledAssets[asset] = !enabledAssets[asset]
+    saveAssetFlags("sovbalance-assets", enabledAssets)
+    applyDisplay()
+}
+
 function syncSettingsTabs() {
     document.querySelectorAll("[data-setting]").forEach(btn => {
         const on = (btn.dataset.setting === "fiat" && btn.dataset.value === fiatCurrency)
+            || (btn.dataset.setting === "asset" && enabledAssets[btn.dataset.value])
             || (btn.dataset.setting === "btcUnit" && btn.dataset.value === btcUnit)
             || (btn.dataset.setting === "xmrUnit" && btn.dataset.value === xmrUnit)
             || (btn.dataset.setting === "zecUnit" && btn.dataset.value === zecUnit)
         btn.classList.toggle("active", on)
+        btn.setAttribute("aria-pressed", on ? "true" : "false")
+    })
+    document.querySelectorAll("[data-asset-row]").forEach(row => {
+        row.hidden = !assetEnabled(row.dataset.assetRow)
     })
 }
 
@@ -286,32 +354,43 @@ function openSettings() {
         confirmButtonText: "Done",
         html: `
 <div class="settings-section">
-  <div class="settings-label">Fiat currency</div>
+  <div class="settings-label">Currencies</div>
+  <div class="asset-tabs">
+    <button type="button" class="asset-tab" data-setting="asset" data-value="btc" data-asset="btc">BTC</button>
+    <button type="button" class="asset-tab" data-setting="asset" data-value="xmr" data-asset="xmr">XMR</button>
+    <button type="button" class="asset-tab" data-setting="asset" data-value="zec" data-asset="zec">ZEC</button>
+  </div>
+</div>
+<div class="settings-section">
+  <div class="settings-label">Fiat</div>
   <div class="asset-tabs">
     <button type="button" class="asset-tab" data-setting="fiat" data-value="USD">USD</button>
     <button type="button" class="asset-tab" data-setting="fiat" data-value="CAD">CAD</button>
   </div>
 </div>
 <div class="settings-section">
-  <div class="settings-label">Bitcoin amounts</div>
-  <div class="asset-tabs">
-    <button type="button" class="asset-tab" data-setting="btcUnit" data-value="btc">BTC</button>
-    <button type="button" class="asset-tab" data-setting="btcUnit" data-value="mbtc">mBTC</button>
-    <button type="button" class="asset-tab" data-setting="btcUnit" data-value="sats">sats</button>
+  <div class="settings-label">Amount units</div>
+  <div class="settings-row" data-asset-row="btc">
+    <div class="settings-row-label btc">BTC</div>
+    <div class="asset-tabs">
+      <button type="button" class="asset-tab" data-setting="btcUnit" data-value="btc">BTC</button>
+      <button type="button" class="asset-tab" data-setting="btcUnit" data-value="mbtc">mBTC</button>
+      <button type="button" class="asset-tab" data-setting="btcUnit" data-value="sats">sats</button>
+    </div>
   </div>
-</div>
-<div class="settings-section">
-  <div class="settings-label">Monero amounts</div>
-  <div class="asset-tabs">
-    <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="xmr">XMR</button>
-    <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="piconero">piconeros</button>
+  <div class="settings-row" data-asset-row="xmr">
+    <div class="settings-row-label xmr">XMR</div>
+    <div class="asset-tabs">
+      <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="xmr">XMR</button>
+      <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="piconero">piconeros</button>
+    </div>
   </div>
-</div>
-<div class="settings-section">
-  <div class="settings-label">Zcash amounts</div>
-  <div class="asset-tabs">
-    <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zec">ZEC</button>
-    <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zats">zats</button>
+  <div class="settings-row" data-asset-row="zec">
+    <div class="settings-row-label zec">ZEC</div>
+    <div class="asset-tabs">
+      <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zec">ZEC</button>
+      <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zats">zats</button>
+    </div>
   </div>
 </div>
 `,
@@ -320,6 +399,7 @@ function openSettings() {
             document.querySelectorAll("[data-setting]").forEach(btn => {
                 btn.addEventListener("click", () => {
                     if (btn.dataset.setting === "fiat") setFiat(btn.dataset.value)
+                    else if (btn.dataset.setting === "asset") toggleAsset(btn.dataset.value)
                     else if (btn.dataset.setting === "btcUnit") setBtcUnit(btn.dataset.value)
                     else if (btn.dataset.setting === "xmrUnit") setXmrUnit(btn.dataset.value)
                     else if (btn.dataset.setting === "zecUnit") setZecUnit(btn.dataset.value)
@@ -398,22 +478,25 @@ function renderWallets(wallets) {
     stopScanIndicator()
     paintPrices()
 
-    if (wallets.length === 0) {
+    const visible = visibleWallets(wallets)
+
+    if (visible.length === 0) {
+        if (chart) chart.destroy()
         document.querySelector("#t tbody").innerHTML = `
         <tr>
-          <td colspan="4">ℹ️ No wallets configured yet</td>
+          <td colspan="4">${wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"}</td>
         </tr>`
         return
     }
 
-    const mixed = new Set(wallets.map(walletAsset)).size > 1
+    const mixed = new Set(visible.map(walletAsset)).size > 1
     const useFiat = mixed && totalFiat > 0
 
     let rows = ""
     const labels = []
     const values = []
 
-    for (const w of wallets) {
+    for (const w of visible) {
 
         const asset = walletAsset(w)
         const fiat = walletFiat(w)
@@ -503,9 +586,9 @@ async function load(rescan = true) {
 function clearTable() {
     document.querySelector("#t tbody").innerHTML = ""
     document.getElementById("totalTop").innerText = "-"
-    document.getElementById("totalBTC").innerText = ""
-    document.getElementById("totalXMR").innerText = ""
-    document.getElementById("totalZEC").innerText = ""
+    setLine("totalBTC", false, "")
+    setLine("totalXMR", false, "")
+    setLine("totalZEC", false, "")
     if (chart) chart.destroy()
 }
 
@@ -655,7 +738,8 @@ function renderChart(labels, data, useFiat = false) {
                     callbacks: {
                         label: (ctx) => {
 
-                            const wallet = walletsCache[ctx.dataIndex]
+                            const wallet = visibleWallets()[ctx.dataIndex]
+                            if (!wallet) return ""
                             const perc = useFiat
                                 ? (totalFiat > 0 ? ((ctx.raw / totalFiat) * 100).toFixed(2) : "0.00")
                                 : walletAsset(wallet) === "xmr"
@@ -726,6 +810,13 @@ async function saveWalletRequest(url, body) {
 
 async function openWalletModal() {
 
+    const enabled = enabledAssetList()
+    if (!enabled.length) return
+
+    const tabsHtml = enabled.map((asset, i) =>
+        `<button type="button" class="asset-tab${i === 0 ? " active" : ""}" data-asset="${asset}">${ASSET_NAMES[asset]}</button>`
+    ).join("")
+
     const result = await Swal.fire({
 
         title: "Add Wallet",
@@ -733,10 +824,8 @@ async function openWalletModal() {
         customClass: { popup: "wallet-popup" },
 
         html: `
-<div class="asset-tabs">
-  <button type="button" class="asset-tab active" data-asset="btc">Bitcoin</button>
-  <button type="button" class="asset-tab" data-asset="xmr">Monero</button>
-  <button type="button" class="asset-tab" data-asset="zec">Zcash</button>
+<div class="asset-tabs"${enabled.length === 1 ? " hidden" : ""}>
+  ${tabsHtml}
 </div>
 
 <input id="swal-wallet" class="swal2-input" placeholder="Wallet Name" maxlength="45">
@@ -784,6 +873,7 @@ spellcheck="false"></textarea>
 
         willOpen: () => {
 
+            const root = Swal.getHtmlContainer()
             const walletInput = document.getElementById("swal-wallet")
             const xpubInput = document.getElementById("swal-xpub")
             const addressInput = document.getElementById("swal-address")
@@ -794,10 +884,10 @@ spellcheck="false"></textarea>
             const btcFields = document.getElementById("btc-fields")
             const xmrFields = document.getElementById("xmr-fields")
             const zecFields = document.getElementById("zec-fields")
-            const tabs = document.querySelectorAll(".asset-tab")
+            const tabs = root.querySelectorAll(".asset-tab")
             const btn = Swal.getConfirmButton()
 
-            let asset = "btc"
+            let asset = enabled[0]
             btn.disabled = true
 
             function setAsset(next) {
@@ -871,12 +961,15 @@ spellcheck="false"></textarea>
                 validate()
             })
 
+            setAsset(enabled[0])
+
         },
 
         preConfirm: () => {
-            const type = document.querySelector(".asset-tab.active")
-                ? document.querySelector(".asset-tab.active").dataset.asset
-                : "btc"
+            const active = Swal.getHtmlContainer().querySelector(".asset-tab.active")
+            const type = (active && active.dataset.asset) || enabled[0]
+
+            if (!assetEnabled(type)) return false
 
             return {
                 type,
