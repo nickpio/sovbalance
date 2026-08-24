@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.4.2"
+version: "1.4.3"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
@@ -36,6 +36,5 @@ dependencies:
   - electrs
 gallery: []
 releaseNotes: >-
-  Fixes the follow-up TLS handshake against lightwalletd. Shielded
-  viewing keys now connect with tonic TLS instead of failing with
-  "Connecting to HTTPS without TLS enabled".
+  Shows a live sync percentage on shielded Zcash wallets while they
+  catch up, instead of treating an unfinished first scan as an error.

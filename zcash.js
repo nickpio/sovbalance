@@ -2,7 +2,7 @@ const crypto = require("crypto")
 const fs = require("fs")
 const path = require("path")
 const tls = require("tls")
-const { spawnSync } = require("child_process")
+const { spawn, spawnSync } = require("child_process")
 const grpc = require("@grpc/grpc-js")
 const protoLoader = require("@grpc/proto-loader")
 
@@ -271,6 +271,108 @@ function runZecScan(args, options = {}) {
 }
 
 
+function parseProgressLine(line) {
+  const prefix = "progress "
+  if (!line.startsWith(prefix)) {
+    return null
+  }
+
+  try {
+    return JSON.parse(line.slice(prefix.length))
+  } catch {
+    return null
+  }
+}
+
+
+function syncSnapshot(parsed, wallet) {
+  const height = Number(parsed.height || 0)
+  const tip = Number(parsed.tip || 0)
+  const birthday = Number(parsed.birthday || wallet.birthday || 0)
+  let percent = Number(parsed.percent)
+  if (!Number.isFinite(percent)) {
+    percent = tip > birthday
+      ? ((height - birthday) * 100) / (tip - birthday)
+      : 0
+  }
+
+  return {
+    height,
+    tip,
+    birthday,
+    percent: Math.round(percent * 10) / 10
+  }
+}
+
+
+function runZecScanAsync(args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const bin = zecScanBin()
+
+    if (!bin) {
+      reject(new Error("Shielded Zcash scanning is not available. Rebuild the app with the zec-scan helper."))
+      return
+    }
+
+    const child = spawn(bin, args, {
+      env: { ...process.env, ...(options.env || {}) }
+    })
+
+    let stdout = ""
+    let stderr = ""
+    let stderrBuf = ""
+    let settled = false
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM")
+      finish(() => reject(new Error("Zcash shielded scan timed out")))
+    }, options.timeoutMs || 15000)
+
+    function finish(fn) {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      fn()
+    }
+
+    child.stdout.on("data", chunk => {
+      stdout += chunk
+    })
+
+    child.stderr.on("data", chunk => {
+      const text = String(chunk)
+      stderr += text
+      stderrBuf += text
+      const lines = stderrBuf.split(/\r?\n/)
+      stderrBuf = lines.pop() || ""
+      for (const line of lines) {
+        const progress = parseProgressLine(line.trim())
+        if (progress && options.onProgress) {
+          options.onProgress(progress)
+        }
+      }
+    })
+
+    child.on("error", err => {
+      finish(() => reject(err))
+    })
+
+    child.on("close", status => {
+      if (settled) return
+      const leftover = parseProgressLine(stderrBuf.trim())
+      if (leftover && options.onProgress) {
+        options.onProgress(leftover)
+      }
+      if (status !== 0) {
+        finish(() => reject(new Error(lastNonEmptyLine(stderr || stdout) || "zec-scan failed")))
+        return
+      }
+      finish(() => resolve({ stdout, stderr, status }))
+    })
+  })
+}
+
+
 function walletFilename(wallet) {
   const hash = crypto
     .createHash("sha256")
@@ -346,7 +448,7 @@ async function getTransparentBalance(wallet) {
 }
 
 
-async function getShieldedBalance(wallet) {
+async function getShieldedBalance(wallet, options = {}) {
   if (!isConfigured()) {
     throw new Error("Zcash Node is not configured. Install the Zcash Node app on Umbrel.")
   }
@@ -366,9 +468,10 @@ async function getShieldedBalance(wallet) {
     args.push("--tls-domain", lwd.tlsDomain)
   }
 
-  const result = runZecScan(args, {
+  const result = await runZecScanAsync(args, {
     timeoutMs: (SCAN_SECONDS + 60) * 1000,
-    env: { ZEC_SCAN_UFVK: wallet.ufvk }
+    env: { ZEC_SCAN_UFVK: wallet.ufvk },
+    onProgress: options.onProgress
   })
 
   const parsed = JSON.parse(lastNonEmptyLine(result.stdout) || "{}")
@@ -377,7 +480,7 @@ async function getShieldedBalance(wallet) {
   if (!parsed.synced) {
     const err = new Error("Zcash shielded sync is still in progress")
     err.partialBalance = total
-    err.syncHeight = Number(parsed.height || 0)
+    err.sync = syncSnapshot(parsed, wallet)
     throw err
   }
 
@@ -385,9 +488,9 @@ async function getShieldedBalance(wallet) {
 }
 
 
-async function getWalletBalance(wallet) {
+async function getWalletBalance(wallet, onProgress) {
   if (wallet.ufvk) {
-    return withLock(async () => getShieldedBalance(wallet))
+    return withLock(async () => getShieldedBalance(wallet, { onProgress }))
   }
 
   return getTransparentBalance(wallet)

@@ -472,6 +472,36 @@ async function fetchWallets(rescan) {
 }
 
 
+function syncPercent(sync) {
+    if (!sync) return 0
+    const pct = Number(sync.percent)
+    if (Number.isFinite(pct)) return Math.max(0, Math.min(100, pct))
+    const height = Number(sync.height || 0)
+    const tip = Number(sync.tip || 0)
+    const birthday = Number(sync.birthday || 0)
+    if (tip <= birthday) return tip > 0 && height >= tip ? 100 : 0
+    return Math.max(0, Math.min(100, ((height - birthday) * 100) / (tip - birthday)))
+}
+
+
+function walletSyncMarkup(w) {
+    if (!w.sync) return ""
+    const pct = syncPercent(w.sync)
+    const tip = Number(w.sync.tip || 0)
+    const birthday = Number(w.sync.birthday || 0)
+    const hasRange = tip > birthday
+    if (hasRange && pct >= 100) return ""
+    const label = hasRange ? `Syncing ${Math.round(pct)}%` : "Syncing…"
+    const fill = hasRange ? Math.max(2, Math.round(pct)) : 0
+    const busy = hasRange ? "" : " wallet-sync-fill-busy"
+    const width = hasRange ? `style="width:${fill}%"` : ""
+    return `<div class="wallet-sync">
+    <div class="wallet-sync-label">${label}</div>
+    <div class="wallet-sync-bar"><div class="wallet-sync-fill${busy}" ${width}></div></div>
+  </div>`
+}
+
+
 function renderWallets(wallets) {
 
     walletsCache = wallets
@@ -513,13 +543,13 @@ function renderWallets(wallets) {
         labels.push(w.wallet)
         values.push(useFiat ? fiat : w.balance)
 
-        const error = w.error
+        const status = w.error
             ? `<div class="wallet-error">${w.error}</div>`
-            : ""
+            : walletSyncMarkup(w)
 
         rows += `
 <tr onclick="editWallet(${w.id})">
-<td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${error}</td>
+<td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
 <td class="percentage">${perc}%</td>
 <td class="balance" title="${amountTitle(w)}">${formatAmount(w)}</td>
 <td class="chevron">›</td>
@@ -566,13 +596,27 @@ async function load(rescan = true) {
 
     document.getElementById("lastUpdated").innerText = "Scanning…"
 
+    let poll = null
+    let pollInFlight = false
     try {
+        poll = setInterval(async () => {
+            if (pollInFlight) return
+            pollInFlight = true
+            try {
+                renderWallets(await fetchWallets(false))
+            } catch {
+                // keep waiting on the rescan request
+            } finally {
+                pollInFlight = false
+            }
+        }, 2000)
         renderWallets(await fetchWallets(true))
     } catch (e) {
         console.error(e)
         document.getElementById("lastUpdated").innerText = e.message || "Scan failed"
         return
     } finally {
+        if (poll) clearInterval(poll)
         scanning = false
     }
 

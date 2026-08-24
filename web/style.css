@@ -488,6 +488,36 @@ footer {
     margin-top: 4px;
 }
 
+.wallet-sync {
+    margin-top: 6px;
+    max-width: 160px;
+}
+
+.wallet-sync-label {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.wallet-sync-bar {
+    height: 3px;
+    background: var(--border);
+    overflow: hidden;
+    position: relative;
+}
+
+.wallet-sync-fill {
+    height: 100%;
+    background: var(--accent-zec);
+    transition: width 0.4s ease;
+}
+
+.wallet-sync-fill-busy {
+    width: 40%;
+    position: absolute;
+    animation: scanmove 1.2s linear infinite;
+}
+
 
 
 .scan-container {

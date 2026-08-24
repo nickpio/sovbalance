@@ -169,6 +169,9 @@ fn open_wallet(path: &Path) -> anyhow::Result<WalletDb<rusqlite::Connection, Net
     let mut db = WalletDb::for_path(path, Network::MainNetwork, SystemClock, OsRng)
         .with_context(|| format!("open wallet database {}", path.display()))?;
     init_wallet_db(&mut db, None).context("initialize wallet database")?;
+    if let Ok(conn) = rusqlite::Connection::open(path) {
+        let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    }
     Ok(db)
 }
 
@@ -493,10 +496,20 @@ async fn ensure_account(
     Ok(())
 }
 
-fn print_summary(
+fn sync_percent(height: u32, birthday: u32, tip: u32) -> f64 {
+    if tip <= birthday {
+        return if tip > 0 && height >= tip { 100.0 } else { 0.0 };
+    }
+    let pct = f64::from(height.saturating_sub(birthday)) * 100.0 / f64::from(tip - birthday);
+    (pct * 10.0).round() / 10.0
+}
+
+fn summary_value(
     db: &WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
+    tip: u32,
+    birthday: u32,
     timed_out: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<serde_json::Value> {
     let policy = ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(1).expect("nonzero"), true);
     let (synced, height, sapling, orchard, transparent, total) =
         if let Some(summary) = db.get_wallet_summary(policy).context("wallet summary")? {
@@ -522,18 +535,87 @@ fn print_summary(
             (false, 0, 0, 0, 0, 0)
         };
 
-    println!(
-        "{}",
-        serde_json::json!({
-            "synced": synced,
-            "height": height,
-            "sapling": sapling,
-            "orchard": orchard,
-            "transparent": transparent,
-            "total": total,
-        })
-    );
-    Ok(())
+    Ok(serde_json::json!({
+        "synced": synced,
+        "height": height,
+        "tip": tip,
+        "birthday": birthday,
+        "percent": sync_percent(height, birthday, tip),
+        "sapling": sapling,
+        "orchard": orchard,
+        "transparent": transparent,
+        "total": total,
+    }))
+}
+
+fn read_scanned_height(path: &Path) -> Option<u32> {
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()?;
+    let _ = conn.busy_timeout(Duration::from_millis(200));
+    conn.query_row("SELECT MAX(height) FROM blocks", [], |row| {
+        row.get::<_, Option<i64>>(0)
+    })
+    .ok()
+    .flatten()
+    .and_then(|height| u32::try_from(height).ok())
+}
+
+fn emit_height_progress(path: &Path, tip: u32, birthday: u32) {
+    let height = read_scanned_height(path).unwrap_or(birthday);
+    let value = serde_json::json!({
+        "height": height,
+        "tip": tip,
+        "birthday": birthday,
+        "percent": sync_percent(height, birthday, tip),
+    });
+    eprintln!("progress {value}");
+}
+
+async fn run_scan(
+    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+    cache: &MemBlockCache,
+    db: &mut WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
+    max_seconds: u64,
+    tip: u32,
+    birthday: u32,
+    db_path: &Path,
+) -> anyhow::Result<bool> {
+    let progress_path = db_path.to_path_buf();
+    let progress = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            emit_height_progress(&progress_path, tip, birthday);
+        }
+    });
+
+    let result = if max_seconds == 0 {
+        zcash_client_backend::sync::run(client, &Network::MainNetwork, cache, db, BATCH_SIZE)
+            .await
+            .map_err(|e| anyhow!("wallet sync failed: {e}"))
+            .map(|()| false)
+    } else {
+        match tokio::time::timeout(
+            Duration::from_secs(max_seconds),
+            zcash_client_backend::sync::run(client, &Network::MainNetwork, cache, db, BATCH_SIZE),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(false),
+            Ok(Err(e)) => Err(anyhow!("wallet sync failed: {e}")),
+            Err(_) => {
+                eprintln!("scan time limit reached; progress is saved");
+                Ok(true)
+            }
+        }
+    };
+
+    progress.abort();
+    result
 }
 
 async fn scan(args: ScanArgs) -> anyhow::Result<()> {
@@ -544,44 +626,25 @@ async fn scan(args: ScanArgs) -> anyhow::Result<()> {
 
     ensure_account(&mut db, &mut client, &ufvk, args.birthday).await?;
 
+    let tip = fetch_chain_tip(&mut client).await.unwrap_or(0);
     eprintln!("scanning from birthday {}", args.birthday);
-    let timed_out = if args.max_seconds == 0 {
-        zcash_client_backend::sync::run(
-            &mut client,
-            &Network::MainNetwork,
-            &cache,
-            &mut db,
-            BATCH_SIZE,
-        )
-        .await
-        .map_err(|e| anyhow!("wallet sync failed: {e}"))?;
-        false
-    } else {
-        match tokio::time::timeout(
-            Duration::from_secs(args.max_seconds),
-            zcash_client_backend::sync::run(
-                &mut client,
-                &Network::MainNetwork,
-                &cache,
-                &mut db,
-                BATCH_SIZE,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(())) => false,
-            Ok(Err(e)) => return Err(anyhow!("wallet sync failed: {e}")),
-            Err(_) => {
-                eprintln!("scan time limit reached; progress is saved");
-                true
-            }
-        }
-    };
+    emit_height_progress(&args.db, tip, args.birthday);
+    let timed_out = run_scan(
+        &mut client,
+        &cache,
+        &mut db,
+        args.max_seconds,
+        tip,
+        args.birthday,
+        &args.db,
+    )
+    .await?;
 
     drop(db);
     drop(cache);
     let db = open_wallet(&args.db)?;
-    print_summary(&db, timed_out)
+    println!("{}", summary_value(&db, tip, args.birthday, timed_out)?);
+    Ok(())
 }
 
 struct ScanArgs {

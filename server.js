@@ -100,6 +100,9 @@ function saveWallets() {
   const toSave = wallets.map(w => {
     const copy = { ...w }
     delete copy.error
+    if (copy.sync && Number(copy.sync.percent) >= 100) {
+      delete copy.sync
+    }
     return copy
   })
   const payload = JSON.stringify(toSave, null, 2)
@@ -428,6 +431,33 @@ async function loadWallets() {
 }
 
 
+function applyZecSync(w, parsed) {
+  if (!parsed) return
+  if (parsed.total !== undefined) {
+    const total = Number(parsed.total) / 1e8
+    if (Number.isFinite(total)) {
+      w.balance = total
+    }
+  }
+  const height = Number(parsed.height || 0)
+  const tip = Number(parsed.tip || 0)
+  const birthday = Number(parsed.birthday || w.birthday || 0)
+  let percent = Number(parsed.percent)
+  if (!Number.isFinite(percent)) {
+    percent = tip > birthday
+      ? ((height - birthday) * 100) / (tip - birthday)
+      : 0
+  }
+  w.sync = {
+    height,
+    tip,
+    birthday,
+    percent: Math.round(percent * 10) / 10
+  }
+  delete w.error
+}
+
+
 async function scanWallet(w) {
 
   if (walletType(w) === "xmr") {
@@ -446,14 +476,17 @@ async function scanWallet(w) {
   if (walletType(w) === "zec") {
 
     try {
-      w.balance = await zcash.getWalletBalance(w)
+      w.balance = await zcash.getWalletBalance(w, progress => applyZecSync(w, progress))
       delete w.error
+      delete w.sync
     } catch (e) {
-      console.error("Error scanning Zcash wallet:", e)
-      if (e.partialBalance !== undefined) {
-        w.balance = e.partialBalance
-        w.error = `Initial sync in progress (height ${e.syncHeight}) — rescan to continue`
+      if (e.partialBalance !== undefined || e.sync) {
+        if (e.partialBalance !== undefined) {
+          w.balance = e.partialBalance
+        }
+        applyZecSync(w, e.sync || { height: e.syncHeight })
       } else {
+        console.error("Error scanning Zcash wallet:", e)
         w.error = e.message
       }
     }
@@ -618,24 +651,37 @@ app.get("/prices", async (req, res) => {
 });
 
 
+let walletsRescan = null
+
 app.get("/wallets", async (req, res) => {
 
   try {
 
     let rescan = req.query.rescan === "true";
 
-    await loadWallets();
-
     if (rescan) {
-      for (const w of wallets) {
-        await scanWallet(w);
+      if (!walletsRescan) {
+        walletsRescan = (async () => {
+          try {
+            await loadWallets();
+            for (const w of wallets) {
+              await scanWallet(w);
+            }
+
+            try {
+              saveWallets();
+            } catch (e) {
+              console.error("WRITE ERROR:", e)
+            }
+          } finally {
+            walletsRescan = null
+          }
+        })()
       }
 
-      try {
-        saveWallets();
-      } catch (e) {
-        console.error("WRITE ERROR:", e)
-      }
+      await walletsRescan
+    } else if (!walletsRescan) {
+      await loadWallets();
     }
 
     wallets.sort((a, b) => a.wallet.localeCompare(b.wallet));
