@@ -7,7 +7,7 @@ services:
       APP_PORT: 3710
 
   app:
-    image: ghcr.io/nickpio/sovbalance/app:1.4.4@sha256:cbb112e7ca2850afc8601db357f4ce16aa6c27175c2f25986322cb48f328dcb1
+    image: ghcr.io/nickpio/sovbalance/app:1.4.5@sha256:26af6349c11193f3c1b5b4532b531d0115cfde7e1737358fb96a87d675636084
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
