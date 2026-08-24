@@ -535,14 +535,9 @@ function mergeFiat(into, from) {
 }
 
 function fillFiatGap(...coins) {
-  let usd = 0
-  let cad = 0
-  for (const c of coins) {
-    if (c.USD) usd = c.USD
-    if (c.CAD) cad = c.CAD
-  }
-  if (!usd || !cad) return
-  const rate = cad / usd
+  const basis = coins.find(c => c.USD && c.CAD)
+  if (!basis) return
+  const rate = basis.CAD / basis.USD
   for (const c of coins) {
     if (c.USD && !c.CAD) c.CAD = c.USD * rate
     if (c.CAD && !c.USD) c.USD = c.CAD / rate
@@ -613,7 +608,7 @@ async function fetchXmrPrices() {
 async function fetchZecPrices() {
   const prices = emptyFiat()
   try {
-    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=ZECUSD,ZECCAD", 5000)
+    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=ZECUSD", 5000)
     mergeFiat(prices, krakenQuotes(data))
     if (prices.USD && prices.CAD) return prices
   } catch (e) {
