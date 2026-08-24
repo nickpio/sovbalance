@@ -122,22 +122,28 @@ function fiatOf(prices) {
     return Number(prices[fiatCurrency]) || 0
 }
 
+function pricesFor(asset) {
+    if (asset === "xmr") return xmrPrices
+    if (asset === "zec") return zecPrices
+    return btcPrices
+}
+
 function walletFiat(w) {
-    const asset = walletAsset(w)
-    if (asset === "xmr") return w.balance * fiatOf(xmrPrices)
-    if (asset === "zec") return w.balance * fiatOf(zecPrices)
-    return w.balance * fiatOf(btcPrices)
+    return w.balance * fiatOf(pricesFor(walletAsset(w)))
 }
 
 function formatFiat(amount, digits = 2) {
     return "$" + amount.toLocaleString(undefined, { maximumFractionDigits: digits })
 }
 
+function formatAssetAmount(asset, amount) {
+    if (asset === "xmr") return formatXmrAmount(amount)
+    if (asset === "zec") return formatZecAmount(amount)
+    return formatBtcAmount(amount)
+}
+
 function formatAmount(w) {
-    const asset = walletAsset(w)
-    if (asset === "xmr") return formatXmrAmount(w.balance)
-    if (asset === "zec") return formatZecAmount(w.balance)
-    return formatBtcAmount(w.balance)
+    return formatAssetAmount(walletAsset(w), w.balance)
 }
 
 function amountTitle(w) {
@@ -511,14 +517,11 @@ function renderWallets(wallets) {
     const visible = visibleWallets(wallets)
 
     if (visible.length === 0) {
-        if (chart) {
-            chart.destroy()
-            chart = null
-        }
         document.querySelector("#t tbody").innerHTML = `
         <tr>
           <td colspan="4">${wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"}</td>
         </tr>`
+        renderChart()
         return
     }
 
@@ -629,10 +632,7 @@ function clearTable() {
     setLine("totalBTC", false, "")
     setLine("totalXMR", false, "")
     setLine("totalZEC", false, "")
-    if (chart) {
-        chart.destroy()
-        chart = null
-    }
+    destroyChart()
 }
 
 
@@ -718,54 +718,45 @@ const ASSET_CHART_COLOR = {
 }
 
 
-function chartSlices() {
-    const { btc, xmr, zec } = coinTotals(walletsCache)
-    const slices = []
+function destroyChart() {
+    if (!chart) return
+    chart.destroy()
+    chart = null
+}
 
-    function add(asset, amount, format) {
-        if (!(amount > 0)) return
-        const prices = asset === "xmr" ? xmrPrices : asset === "zec" ? zecPrices : btcPrices
-        slices.push({
+
+function chartSlices() {
+    const amounts = { btc: totalBTC, xmr: totalXMR, zec: totalZEC }
+    return ASSETS.filter(asset => amounts[asset] > 0).map(asset => {
+        const amount = amounts[asset]
+        return {
             asset,
             label: asset.toUpperCase(),
             amount,
-            fiat: amount * fiatOf(prices),
-            color: ASSET_CHART_COLOR[asset],
-            format
-        })
-    }
-
-    add("btc", btc, formatBtcAmount)
-    add("xmr", xmr, formatXmrAmount)
-    add("zec", zec, formatZecAmount)
-    return slices
+            fiat: amount * fiatOf(pricesFor(asset)),
+            color: ASSET_CHART_COLOR[asset]
+        }
+    })
 }
 
 
 function renderChart() {
-
     const slices = chartSlices()
-    const canvas = document.getElementById("chart").getContext("2d")
-
-    if (chart) {
-        chart.destroy()
-        chart = null
-    }
-
+    destroyChart()
     if (!slices.length) return
 
     const useFiat = slices.length > 1 && slices.every(s => s.fiat > 0)
     const values = slices.map(s => useFiat ? s.fiat : s.amount)
     const total = values.reduce((sum, n) => sum + n, 0)
 
-    chart = new Chart(canvas, {
+    chart = new Chart(document.getElementById("chart").getContext("2d"), {
 
         type: "doughnut",
 
         data: {
             labels: slices.map(s => s.label),
             datasets: [{
-                data: [],
+                data: values,
                 backgroundColor: slices.map(s => s.color),
                 borderColor: "rgba(0,0,0,0.35)",
                 borderWidth: 1,
@@ -816,10 +807,11 @@ function renderChart() {
                             const slice = slices[ctx.dataIndex]
                             if (!slice) return ""
                             const perc = total > 0 ? ((ctx.raw / total) * 100).toFixed(2) : "0.00"
+                            const amount = formatAssetAmount(slice.asset, slice.amount)
                             if (useFiat) {
-                                return `${perc}%   •   ${slice.format(slice.amount)}   •   ${formatFiat(slice.fiat)} ${fiatCurrency}`
+                                return `${perc}%   •   ${amount}   •   ${formatFiat(slice.fiat)} ${fiatCurrency}`
                             }
-                            return `${perc}%   •   ${slice.format(slice.amount)}`
+                            return `${perc}%   •   ${amount}`
                         }
                     }
                 }
@@ -829,13 +821,6 @@ function renderChart() {
         }
 
     })
-
-    setTimeout(() => {
-
-        chart.data.datasets[0].data = values
-        chart.update()
-
-    }, 50)
 
 }
 
