@@ -511,7 +511,10 @@ function renderWallets(wallets) {
     const visible = visibleWallets(wallets)
 
     if (visible.length === 0) {
-        if (chart) chart.destroy()
+        if (chart) {
+            chart.destroy()
+            chart = null
+        }
         document.querySelector("#t tbody").innerHTML = `
         <tr>
           <td colspan="4">${wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"}</td>
@@ -523,8 +526,6 @@ function renderWallets(wallets) {
     const useFiat = mixed && totalFiat > 0
 
     let rows = ""
-    const labels = []
-    const values = []
 
     for (const w of visible) {
 
@@ -539,9 +540,6 @@ function renderWallets(wallets) {
                     : (totalBTC > 0 ? (w.balance / totalBTC) * 100 : 0)
 
         const perc = share.toFixed(1)
-
-        labels.push(w.wallet)
-        values.push(useFiat ? fiat : w.balance)
 
         const status = w.error
             ? `<div class="wallet-error">${w.error}</div>`
@@ -558,9 +556,7 @@ function renderWallets(wallets) {
 
     document.querySelector("#t tbody").innerHTML = rows
 
-    requestAnimationFrame(() => {
-        renderChart(labels, values, useFiat)
-    })
+    renderChart()
 
 }
 
@@ -633,7 +629,10 @@ function clearTable() {
     setLine("totalBTC", false, "")
     setLine("totalXMR", false, "")
     setLine("totalZEC", false, "")
-    if (chart) chart.destroy()
+    if (chart) {
+        chart.destroy()
+        chart = null
+    }
 }
 
 
@@ -712,29 +711,62 @@ const dimOthers = {
 
 
 
-function renderChart(labels, data, useFiat = false) {
+const ASSET_CHART_COLOR = {
+    btc: "#f7931a",
+    xmr: "#ff6600",
+    zec: "#ffd24a"
+}
 
+
+function chartSlices() {
+    const { btc, xmr, zec } = coinTotals(walletsCache)
+    const slices = []
+
+    function add(asset, amount, format) {
+        if (!(amount > 0)) return
+        const prices = asset === "xmr" ? xmrPrices : asset === "zec" ? zecPrices : btcPrices
+        slices.push({
+            asset,
+            label: asset.toUpperCase(),
+            amount,
+            fiat: amount * fiatOf(prices),
+            color: ASSET_CHART_COLOR[asset],
+            format
+        })
+    }
+
+    add("btc", btc, formatBtcAmount)
+    add("xmr", xmr, formatXmrAmount)
+    add("zec", zec, formatZecAmount)
+    return slices
+}
+
+
+function renderChart() {
+
+    const slices = chartSlices()
     const canvas = document.getElementById("chart").getContext("2d")
 
-    if (chart) chart.destroy()
+    if (chart) {
+        chart.destroy()
+        chart = null
+    }
+
+    if (!slices.length) return
+
+    const useFiat = slices.length > 1 && slices.every(s => s.fiat > 0)
+    const values = slices.map(s => useFiat ? s.fiat : s.amount)
+    const total = values.reduce((sum, n) => sum + n, 0)
 
     chart = new Chart(canvas, {
 
         type: "doughnut",
 
         data: {
-            labels,
+            labels: slices.map(s => s.label),
             datasets: [{
                 data: [],
-                backgroundColor: [
-                    "#f7931a",
-                    "#ff6600",
-                    "#f4b728",
-                    "#ffffff",
-                    "#c2410c",
-                    "#fdba74",
-                    "#737373"
-                ],
+                backgroundColor: slices.map(s => s.color),
                 borderColor: "rgba(0,0,0,0.35)",
                 borderWidth: 1,
 
@@ -781,22 +813,13 @@ function renderChart(labels, data, useFiat = false) {
                     borderWidth: 1,
                     callbacks: {
                         label: (ctx) => {
-
-                            const wallet = visibleWallets()[ctx.dataIndex]
-                            if (!wallet) return ""
-                            const perc = useFiat
-                                ? (totalFiat > 0 ? ((ctx.raw / totalFiat) * 100).toFixed(2) : "0.00")
-                                : walletAsset(wallet) === "xmr"
-                                    ? (totalXMR > 0 ? ((wallet.balance / totalXMR) * 100).toFixed(2) : "0.00")
-                                    : walletAsset(wallet) === "zec"
-                                        ? (totalZEC > 0 ? ((wallet.balance / totalZEC) * 100).toFixed(2) : "0.00")
-                                        : (totalBTC > 0 ? ((wallet.balance / totalBTC) * 100).toFixed(2) : "0.00")
-
+                            const slice = slices[ctx.dataIndex]
+                            if (!slice) return ""
+                            const perc = total > 0 ? ((ctx.raw / total) * 100).toFixed(2) : "0.00"
                             if (useFiat) {
-                                return `${perc}%   •   ${formatAmount(wallet)}   •   ${formatFiat(ctx.raw)} ${fiatCurrency}`
+                                return `${perc}%   •   ${slice.format(slice.amount)}   •   ${formatFiat(slice.fiat)} ${fiatCurrency}`
                             }
-
-                            return `${perc}%   •   ${formatAmount(wallet)}`
+                            return `${perc}%   •   ${slice.format(slice.amount)}`
                         }
                     }
                 }
@@ -809,7 +832,7 @@ function renderChart(labels, data, useFiat = false) {
 
     setTimeout(() => {
 
-        chart.data.datasets[0].data = data
+        chart.data.datasets[0].data = values
         chart.update()
 
     }, 50)
@@ -1330,7 +1353,7 @@ const centerText = {
         } else if (totalZEC && !totalBTC && !totalXMR) {
             const { value, unit } = splitAmountLabel(formatZecAmount(totalZEC))
             ctx.fillText(value, x, y - 8)
-            ctx.fillStyle = "#f4b728"
+            ctx.fillStyle = "#ffd24a"
             ctx.font = "400 14px system-ui"
             ctx.fillText(unit, x, y + 14)
         } else {
