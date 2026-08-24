@@ -860,11 +860,11 @@ spellcheck="false"></textarea>
 <div id="zec-fields" style="display:none">
 <textarea id="swal-zec-address"
 class="swal2-textarea"
-rows="2"
-maxlength="35"
-placeholder="Transparent address (t1… or t3…)"
+rows="3"
+placeholder="Transparent address (t1… or t3…) or viewing key (uview1…)"
 spellcheck="false"></textarea>
-<div class="wallet-hint">Requires the Zcash Node app. Transparent mainnet addresses only (t1 or t3). Shielded viewing keys are not supported yet.</div>
+<input id="swal-zec-birthday" class="swal2-input" placeholder="Birthday height (blank = NU5)" inputmode="numeric" style="display:none">
+<div class="wallet-hint">Requires the Zcash Node app. Paste a transparent t1/t3 address, or a unified viewing key starting with uview1. Birthday defaults to NU5 (1687104); set it earlier only if this wallet received funds before May 2022. First shielded sync can take a while and resumes on the next rescan.</div>
 </div>
 `,
 
@@ -880,6 +880,7 @@ spellcheck="false"></textarea>
             const viewKeyInput = document.getElementById("swal-viewkey")
             const restoreInput = document.getElementById("swal-restore")
             const zecAddressInput = document.getElementById("swal-zec-address")
+            const zecBirthdayInput = document.getElementById("swal-zec-birthday")
             const label = document.getElementById("wallet-type")
             const btcFields = document.getElementById("btc-fields")
             const xmrFields = document.getElementById("xmr-fields")
@@ -905,7 +906,14 @@ spellcheck="false"></textarea>
 
                 if (asset === "zec") {
                     const address = zecAddressInput.value.trim()
-                    btn.disabled = !(wallet && /^(t1|t3)[1-9A-HJ-NP-Za-km-z]{33}$/.test(address))
+                    const birthday = zecBirthdayInput.value.trim()
+                    const isUfvk = address.startsWith("uview1")
+                    zecBirthdayInput.style.display = isUfvk ? "" : "none"
+                    const validBirthday = birthday === "" || /^\d+$/.test(birthday)
+                    const validKey = isUfvk
+                        ? address.length >= 80 && /^uview1[0-9a-z]+$/.test(address)
+                        : /^(t1|t3)[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)
+                    btn.disabled = !(wallet && validKey && validBirthday)
                     return
                 }
 
@@ -941,6 +949,7 @@ spellcheck="false"></textarea>
             viewKeyInput.addEventListener("input", validate)
             restoreInput.addEventListener("input", validate)
             zecAddressInput.addEventListener("input", validate)
+            zecBirthdayInput.addEventListener("input", validate)
 
             xpubInput.addEventListener("input", () => {
 
@@ -978,7 +987,8 @@ spellcheck="false"></textarea>
                 address: document.getElementById("swal-address").value.trim(),
                 viewKey: document.getElementById("swal-viewkey").value.trim(),
                 restoreHeight: document.getElementById("swal-restore").value.trim() || 0,
-                zecAddress: document.getElementById("swal-zec-address").value.trim()
+                zecAddress: document.getElementById("swal-zec-address").value.trim(),
+                zecBirthday: document.getElementById("swal-zec-birthday").value.trim()
             }
         }
 
@@ -986,7 +996,7 @@ spellcheck="false"></textarea>
 
     if (!result.isConfirmed) return
 
-    const { type, wallet, xpub, address, viewKey, restoreHeight, zecAddress } = result.value
+    const { type, wallet, xpub, address, viewKey, restoreHeight, zecAddress, zecBirthday } = result.value
 
     let ok = false
 
@@ -999,11 +1009,18 @@ spellcheck="false"></textarea>
             restoreHeight
         })
     } else if (type === "zec") {
-        ok = await saveWalletRequest("/wallet", {
-            wallet,
-            type: "zec",
-            address: zecAddress
-        })
+        ok = zecAddress.startsWith("uview1")
+            ? await saveWalletRequest("/wallet", {
+                wallet,
+                type: "zec",
+                ufvk: zecAddress,
+                birthday: zecBirthday
+            })
+            : await saveWalletRequest("/wallet", {
+                wallet,
+                type: "zec",
+                address: zecAddress
+            })
     } else {
         ok = await saveWalletRequest("/wallet", {
             wallet,
@@ -1024,6 +1041,7 @@ async function editWallet(id) {
 
     const isXmr = walletAsset(wallet) === "xmr"
     const isZec = walletAsset(wallet) === "zec"
+    const isZecShielded = isZec && !!wallet.ufvk
 
     const result = await Swal.fire({
 
@@ -1039,6 +1057,11 @@ async function editWallet(id) {
 <div class="wallet-hint">After you spend, export key images from the wallet that has the spend key (Monero GUI: Settings → Wallet → Export key images; Feather: File → Export → Key images) and attach that file here. Incoming funds do not need this.</div>
 <input id="swal-keyimages" class="keyimages-file" type="file">
 <textarea id="swal-keyimages-text" class="swal2-textarea" rows="3" placeholder="Or paste key images JSON" spellcheck="false"></textarea>
+` : isZecShielded ? `
+<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
+<textarea id="swal-ufvk" class="swal2-textarea" rows="3">${wallet.ufvk || ""}</textarea>
+<input id="swal-birthday" class="swal2-input" value="${wallet.birthday || 1687104}" inputmode="numeric">
+<div class="wallet-hint">Unified viewing key (uview1…). Birthday defaults to NU5 (1687104). Changing the key or birthday starts a new scan.</div>
 ` : isZec ? `
 <input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-address" class="swal2-textarea" rows="2" maxlength="35">${wallet.address || ""}</textarea>
@@ -1056,6 +1079,14 @@ async function editWallet(id) {
         denyButtonColor: "#ef4444",
 
         preConfirm: async () => {
+            if (isZecShielded) {
+                return {
+                    wallet: cleanInput(document.getElementById("swal-wallet").value),
+                    ufvk: document.getElementById("swal-ufvk").value.trim(),
+                    birthday: document.getElementById("swal-birthday").value.trim()
+                }
+            }
+
             if (isZec) {
                 return {
                     wallet: cleanInput(document.getElementById("swal-wallet").value),
@@ -1161,6 +1192,21 @@ async function editWallet(id) {
         }
 
         load(rescan)
+        return
+    }
+
+    if (isZecShielded) {
+        const { wallet: newWallet, ufvk, birthday } = result.value
+        const ok = await saveWalletRequest("/wallet/update", {
+            id: wallet.id,
+            wallet: newWallet,
+            ufvk,
+            birthday
+        })
+
+        if (!ok) return
+
+        load(ufvk !== wallet.ufvk || Number(birthday) !== Number(wallet.birthday))
         return
     }
 

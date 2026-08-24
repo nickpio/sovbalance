@@ -1,3 +1,12 @@
+FROM rust:1-alpine AS zecscan
+
+RUN apk add --no-cache musl-dev sqlite-dev pkgconfig
+
+WORKDIR /src
+COPY zecscan /src
+RUN cargo build --release --locked
+
+
 FROM node:20-alpine
 
 WORKDIR /app
@@ -8,12 +17,13 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY . .
+COPY --from=zecscan /src/target/release/zec-scan /usr/local/bin/zec-scan
 
 RUN apk add --no-cache gcc musl-dev make \
   && make -C vendor/cryptonight \
   && cp vendor/cryptonight/cn-slow-hash /usr/local/bin/cn-slow-hash \
   && apk del gcc musl-dev make \
-  && chmod 755 /app/docker-entrypoint.sh
+  && chmod 755 /app/docker-entrypoint.sh /usr/local/bin/zec-scan
 
 EXPOSE 3710
 

@@ -1,6 +1,6 @@
 ![Bitcoin](https://img.shields.io/badge/Bitcoin-self--hosted-orange)
 ![Monero](https://img.shields.io/badge/Monero-view--only-brightgreen)
-![Zcash](https://img.shields.io/badge/Zcash-transparent-yellow)
+![Zcash](https://img.shields.io/badge/Zcash-shielded-yellow)
 ![Umbrel](https://img.shields.io/badge/Runs%20on-Umbrel-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
  
@@ -9,7 +9,7 @@
 
 Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
 
-A simple and private **wallet balance tracker** for Bitcoin XPUB / YPUB / ZPUB, Monero view-only wallets, and Zcash transparent addresses.
+A simple and private **wallet balance tracker** for Bitcoin XPUB / YPUB / ZPUB, Monero view-only wallets, and Zcash transparent addresses or unified viewing keys.
 
 sovBalance allows you to monitor multiple wallets using **your own Electrs**, and optionally **your own Monero Node** and **Zcash Node**, without relying on third-party balance APIs.
 
@@ -31,7 +31,7 @@ sovBalance avoids this by connecting **only to your own node**.
 
 Bitcoin: XPUB / YPUB / ZPUB  
 Monero: primary address + private view key  
-Zcash: transparent t1 / t3 address  
+Zcash: transparent t1 / t3 address or unified viewing key (`uview1…`)  
 ↓  
 sovBalance  
 ↓  
@@ -48,7 +48,7 @@ Your wallet data never leaves your infrastructure.
 - Track multiple Bitcoin, Monero, and Zcash wallets
 - Bitcoin: **XPUB, YPUB and ZPUB**
 - Monero: **view-only** wallets (primary address + private view key)
-- Zcash: **transparent** mainnet addresses (`t1` / `t3`)
+- Zcash: **transparent** mainnet addresses (`t1` / `t3`) and **shielded** unified viewing keys (`uview1…`)
 - Import Monero **key images** after spending so spent outputs drop from the balance
 - Connects to your **local Electrs** app, and to **Monero Node** or **Zcash Node** when those apps are installed
 - Combined USD total with per-asset amounts
@@ -84,8 +84,11 @@ View-only wallets can see received outputs, including subaddresses. Spent funds 
 | Type | What you enter |
 |-----|------|
 | Transparent | Mainnet `t1` or `t3` address (35 characters) |
+| Shielded | Mainnet unified viewing key (`uview1…`) + optional birthday height |
 
-Balances come from your Zcash Node's lightwalletd. Shielded viewing keys (`uview1…`) are not supported yet.
+Balances come from your Zcash Node's lightwalletd. Shielded wallets are scanned locally with a `zec-scan` helper: the viewing key trial-decrypts Sapling and Orchard outputs and tracks spends via nullifiers. Incoming-only keys (`uivk1…`) are rejected because they cannot detect spends.
+
+Birthday height defaults to NU5 activation (1,687,104, May 2022). Set it earlier only if this wallet received funds before then; it cannot go below Sapling activation (419,200). The first shielded sync can take a long time and is saved to disk, so the next rescan continues where it left off.
 
 ---
 
@@ -129,7 +132,7 @@ After installation the app will automatically connect to your **Electrs** app. I
 4. Enter a wallet name
 5. Bitcoin: paste an **XPUB / YPUB / ZPUB**  
    Monero: paste a **primary address**, **private view key**, and optional **restore height**  
-   Zcash: paste a transparent **t1 / t3** address
+   Zcash: paste a transparent **t1 / t3** address, or a **uview1…** viewing key and optional birthday height
 
 The wallet balance will be tracked automatically.
 
@@ -144,7 +147,8 @@ sovBalance is designed with privacy in mind.
 - No third-party balance APIs
 - No analytics
 - No external wallet queries
-- Bitcoin xpubs, Monero view keys, and Zcash addresses stay on your node
+- Bitcoin xpubs, Monero view keys, and Zcash addresses / viewing keys stay on your node
+- A Zcash unified viewing key reveals the full account history to whoever holds it, and is stored in plaintext `wallets.json` like a Monero view key
 - Spend keys are never required
 - Everything runs locally on your node
 
@@ -154,7 +158,7 @@ USD display prices may be fetched from public price APIs. Wallet keys and balanc
 
 ## Architecture
 
-Bitcoin wallets are derived locally and queried through Electrs. Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node. Zcash transparent balances are queried from your Zcash Node's lightwalletd.
+Bitcoin wallets are derived locally and queried through Electrs. Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
 
 XPUB / YPUB / ZPUB  
 ↓ (local derivation)  
@@ -176,6 +180,14 @@ lightwalletd
 ↓  
 Zcash Node  
 
+Unified viewing key (`uview1…`)  
+↓  
+zec-scan  
+↓ (gRPC compact blocks)  
+lightwalletd  
+↓  
+Zcash Node  
+
 No external services are involved in balance scanning.
 
 All balance calculations are deterministic and based solely on your node’s data.
@@ -193,6 +205,7 @@ This app is designed to run inside Umbrel’s managed environment.
 - Does not define custom Docker networks (Umbrel handles service networking)
 - Persists app state in `${APP_DATA_DIR}/data`
 - Persists Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
+- Persists shielded Zcash scan databases in `${APP_DATA_DIR}/data/zcash`
 - Depends on the `electrs` Umbrel app. Monero Node and Zcash Node are optional
 
 These constraints ensure compatibility with Umbrel’s runtime and predictable behavior across installations.
@@ -209,6 +222,16 @@ These constraints ensure compatibility with Umbrel’s runtime and predictable b
 This project favors simplicity and control over abstraction.
 
 ---
+
+## Local development
+
+```
+npm install
+cargo build --release --manifest-path zecscan/Cargo.toml
+node server.js
+```
+
+`zcash.js` looks for `zec-scan` at `$ZEC_SCAN`, `/usr/local/bin/zec-scan`, or `zecscan/target/release/zec-scan`. Shielded wallets need `ZCASH_LWD_HOST` (and optional `ZCASH_LWD_PORT`, default 9067) pointing at lightwalletd.
 
 ## Developers
 

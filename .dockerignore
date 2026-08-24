@@ -5,6 +5,7 @@ node_modules
 *.md
 LICENSE
 vendor/cryptonight/cn-slow-hash
+zecscan/target
 .github
 docker-compose.yml
 umbrel-app.yml

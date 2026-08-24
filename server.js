@@ -450,7 +450,12 @@ async function scanWallet(w) {
       delete w.error
     } catch (e) {
       console.error("Error scanning Zcash wallet:", e)
-      w.error = e.message
+      if (e.partialBalance !== undefined) {
+        w.balance = e.partialBalance
+        w.error = `Initial sync in progress (height ${e.syncHeight}) — rescan to continue`
+      } else {
+        w.error = e.message
+      }
     }
 
     return
@@ -694,18 +699,34 @@ app.post("/wallet", (req, res) => {
       return res.status(400).json({ error: e.message })
     }
 
-    if (wallets.some(w => w.address === info.address && w.type === "zec")) {
-      return res.status(400).json({ error: "address already exists" })
-    }
+    if (info.ufvk) {
+      if (wallets.some(w => w.ufvk === info.ufvk && w.type === "zec")) {
+        return res.status(400).json({ error: "viewing key already exists" })
+      }
 
-    wallets.push({
-      id,
-      order,
-      wallet,
-      type: "zec",
-      address: info.address,
-      balance: 0
-    })
+      wallets.push({
+        id,
+        order,
+        wallet,
+        type: "zec",
+        ufvk: info.ufvk,
+        birthday: info.birthday,
+        balance: 0
+      })
+    } else {
+      if (wallets.some(w => w.address === info.address && w.type === "zec")) {
+        return res.status(400).json({ error: "address already exists" })
+      }
+
+      wallets.push({
+        id,
+        order,
+        wallet,
+        type: "zec",
+        address: info.address,
+        balance: 0
+      })
+    }
 
   } else {
 
@@ -851,12 +872,25 @@ app.post("/wallet/update", (req, res) => {
       return res.status(400).json({ error: e.message })
     }
 
-    if (wallets.some(w => w.address === info.address && w.type === "zec" && w.id !== current.id)) {
-      return res.status(400).json({ error: "address already exists" })
-    }
+    if (info.ufvk) {
+      if (wallets.some(w => w.ufvk === info.ufvk && w.type === "zec" && w.id !== current.id)) {
+        return res.status(400).json({ error: "viewing key already exists" })
+      }
 
-    current.wallet = wallet
-    current.address = info.address
+      current.wallet = wallet
+      current.ufvk = info.ufvk
+      current.birthday = info.birthday
+      delete current.address
+    } else {
+      if (wallets.some(w => w.address === info.address && w.type === "zec" && w.id !== current.id)) {
+        return res.status(400).json({ error: "address already exists" })
+      }
+
+      current.wallet = wallet
+      current.address = info.address
+      delete current.ufvk
+      delete current.birthday
+    }
 
   } else {
 
