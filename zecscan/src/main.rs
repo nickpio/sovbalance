@@ -271,7 +271,31 @@ fn insecure_rustls_config() -> rustls::ClientConfig {
     config
 }
 
-async fn open_tls_client(
+fn as_http(url: &str) -> String {
+    match url.strip_prefix("https://") {
+        Some(rest) => format!("http://{rest}"),
+        None => url.to_string(),
+    }
+}
+
+async fn open_tls_verified(
+    endpoint: &str,
+    domain: &str,
+) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+    let tls = tonic::transport::ClientTlsConfig::new()
+        .domain_name(domain)
+        .with_enabled_roots()
+        .assume_http2(true);
+    let channel = channel_endpoint(endpoint)?
+        .tls_config(tls)
+        .with_context(|| format!("TLS config for {endpoint}"))?
+        .connect()
+        .await
+        .with_context(|| format!("connect to lightwalletd at {endpoint}"))?;
+    Ok(CompactTxStreamerClient::new(channel))
+}
+
+async fn open_tls_insecure(
     endpoint: &str,
     tls_domain: Option<&str>,
 ) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
@@ -297,11 +321,31 @@ async fn open_tls_client(
         }
     });
 
-    let channel = channel_endpoint(endpoint)?
+    // tonic rejects https:// unless tls_config() is set. This connector
+    // already does TLS, so the Endpoint URI has to stay http://.
+    let channel = channel_endpoint(&as_http(endpoint))?
         .connect_with_connector(connector)
         .await
         .with_context(|| format!("connect to lightwalletd at {endpoint}"))?;
     Ok(CompactTxStreamerClient::new(channel))
+}
+
+async fn open_tls_client(
+    endpoint: &str,
+    tls_domain: Option<&str>,
+) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+    let domain = tls_domain.filter(|d| !d.is_empty()).map(|d| d.to_string()).or_else(|| {
+        url_host(endpoint).filter(|host| host.parse::<std::net::IpAddr>().is_err())
+    });
+
+    if let Some(domain) = domain {
+        match open_tls_verified(endpoint, &domain).await {
+            Ok(client) => return Ok(client),
+            Err(e) => eprintln!("verified TLS failed ({e}); retrying without certificate checks"),
+        }
+    }
+
+    open_tls_insecure(endpoint, tls_domain).await
 }
 
 async fn open_client(
