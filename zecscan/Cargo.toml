@@ -15,10 +15,15 @@ clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 rusqlite = "0.37"
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
-tonic = { version = "0.14", default-features = false, features = ["transport"] }
+http = "1"
+hyper-util = { version = "0.1", features = ["tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tonic = { version = "0.14", default-features = false, features = ["transport", "tls-ring", "tls-webpki-roots", "tls-native-roots"] }
+tower = { version = "0.5", features = ["util"] }
 zcash_address = "0.13"
-zcash_client_backend = { version = "0.24", features = ["lightwalletd-tonic-transport", "sync", "orchard", "transparent-inputs"] }
+zcash_client_backend = { version = "0.24", features = ["lightwalletd-tonic-tls-webpki-roots", "sync", "orchard", "transparent-inputs"] }
 zcash_client_sqlite = { version = "0.22", features = ["orchard", "transparent-inputs"] }
 zcash_keys = { version = "0.16", features = ["orchard", "transparent-inputs"] }
 zcash_protocol = "0.10"

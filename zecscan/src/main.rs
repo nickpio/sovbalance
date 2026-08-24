@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -50,6 +50,8 @@ enum Command {
     Scan {
         #[arg(long)]
         lwd: String,
+        #[arg(long)]
+        tls_domain: Option<String>,
         #[arg(long)]
         db: PathBuf,
         #[arg(long)]
@@ -179,17 +181,209 @@ fn lwd_endpoint(raw: &str) -> anyhow::Result<String> {
     }
 }
 
-async fn connect_lwd(lwd: &str) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
-    let endpoint = lwd_endpoint(lwd)?;
-    eprintln!("connecting to {endpoint}");
-    let channel = tonic::transport::Channel::from_shared(endpoint.clone())
+fn url_host(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let host = if let Some(inner) = authority.strip_prefix('[').and_then(|s| s.split(']').next()) {
+        inner
+    } else {
+        authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority)
+    };
+    Some(host.to_string())
+}
+
+fn is_transport_error(err: &dyn std::error::Error) -> bool {
+    let mut cur: Option<&dyn std::error::Error> = Some(err);
+    while let Some(e) = cur {
+        let msg = e.to_string().to_ascii_lowercase();
+        if msg.contains("broken pipe")
+            || msg.contains("transport error")
+            || msg.contains("connection reset")
+            || msg.contains("connection error")
+        {
+            return true;
+        }
+        cur = e.source();
+    }
+    false
+}
+
+fn channel_endpoint(endpoint: &str) -> anyhow::Result<tonic::transport::Endpoint> {
+    Ok(tonic::transport::Channel::from_shared(endpoint.to_string())
         .with_context(|| format!("invalid lightwalletd URL {endpoint}"))?
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
+        .tcp_nodelay(true)
+        .http2_keep_alive_interval(Duration::from_secs(10))
+        .keep_alive_timeout(Duration::from_secs(10))
+        .keep_alive_while_idle(true))
+}
+
+#[derive(Debug)]
+struct NoCertVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for NoCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+fn insecure_rustls_config() -> rustls::ClientConfig {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    config
+}
+
+async fn open_tls_client(
+    endpoint: &str,
+    tls_domain: Option<&str>,
+) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+    let sni = tls_domain
+        .filter(|d| !d.is_empty())
+        .map(|d| d.to_string())
+        .or_else(|| url_host(endpoint))
+        .unwrap_or_else(|| "localhost".into());
+    let tls = tokio_rustls::TlsConnector::from(Arc::new(insecure_rustls_config()));
+    let connector = tower::service_fn(move |uri: http::Uri| {
+        let tls = tls.clone();
+        let sni = sni.clone();
+        async move {
+            let host = uri.host().unwrap_or("127.0.0.1").to_string();
+            let port = uri.port_u16().unwrap_or(443);
+            let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
+            let _ = tcp.set_nodelay(true);
+            let name = rustls::pki_types::ServerName::try_from(sni)
+                .or_else(|_| rustls::pki_types::ServerName::try_from(host))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+            let tls_stream = tls.connect(name, tcp).await?;
+            Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(tls_stream))
+        }
+    });
+
+    let channel = channel_endpoint(endpoint)?
+        .connect_with_connector(connector)
+        .await
+        .with_context(|| format!("connect to lightwalletd at {endpoint}"))?;
+    Ok(CompactTxStreamerClient::new(channel))
+}
+
+async fn open_client(
+    endpoint: &str,
+    tls_domain: Option<&str>,
+) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+    eprintln!("connecting to {endpoint}");
+    if endpoint.starts_with("https://") {
+        return open_tls_client(endpoint, tls_domain).await;
+    }
+
+    let channel = channel_endpoint(endpoint)?
         .connect()
         .await
         .with_context(|| format!("connect to lightwalletd at {endpoint}"))?;
     Ok(CompactTxStreamerClient::new(channel))
+}
+
+async fn handshake(
+    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+) -> anyhow::Result<()> {
+    client
+        .get_lightd_info(service::Empty::default())
+        .await
+        .context("lightwalletd handshake")?;
+    Ok(())
+}
+
+async fn open_and_handshake(
+    endpoint: &str,
+    tls_domain: Option<&str>,
+) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+    let mut client = open_client(endpoint, tls_domain).await?;
+    handshake(&mut client).await?;
+    Ok(client)
+}
+
+async fn connect_lwd(
+    lwd: &str,
+    tls_domain: Option<&str>,
+) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+    let endpoint = lwd_endpoint(lwd)?;
+    match open_and_handshake(&endpoint, tls_domain).await {
+        Ok(client) => Ok(client),
+        Err(e) if endpoint.starts_with("http://") && is_transport_error(e.root_cause()) => {
+            let https = format!("https://{}", endpoint.trim_start_matches("http://"));
+            match open_and_handshake(&https, tls_domain).await {
+                Ok(client) => {
+                    eprintln!("plaintext gRPC failed; using TLS at {https}");
+                    Ok(client)
+                }
+                Err(_) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+async fn fetch_chain_tip(
+    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+) -> anyhow::Result<u32> {
+    match client
+        .get_latest_block(service::ChainSpec::default())
+        .await
+    {
+        Ok(res) => res
+            .into_inner()
+            .height
+            .try_into()
+            .context("chain tip height does not fit in u32"),
+        Err(e) => {
+            let height = client
+                .get_lightd_info(service::Empty::default())
+                .await
+                .with_context(|| format!("fetch chain tip: {e}"))?
+                .into_inner()
+                .block_height;
+            height
+                .try_into()
+                .context("chain tip height does not fit in u32")
+        }
+    }
 }
 
 async fn wallet_birthday(
@@ -240,14 +434,7 @@ async fn ensure_account(
         return Ok(());
     }
 
-    let chain_tip: u32 = client
-        .get_latest_block(service::ChainSpec::default())
-        .await
-        .context("fetch chain tip")?
-        .into_inner()
-        .height
-        .try_into()
-        .context("chain tip height does not fit in u32")?;
+    let chain_tip = fetch_chain_tip(client).await?;
 
     let birthday = wallet_birthday(
         client,
@@ -309,7 +496,7 @@ async fn scan(args: ScanArgs) -> anyhow::Result<()> {
     let ufvk = decode_mainnet_ufvk(&args.ufvk)?;
     let cache = MemBlockCache::default();
     let mut db = open_wallet(&args.db)?;
-    let mut client = connect_lwd(&args.lwd).await?;
+    let mut client = connect_lwd(&args.lwd, args.tls_domain.as_deref()).await?;
 
     ensure_account(&mut db, &mut client, &ufvk, args.birthday).await?;
 
@@ -355,6 +542,7 @@ async fn scan(args: ScanArgs) -> anyhow::Result<()> {
 
 struct ScanArgs {
     lwd: String,
+    tls_domain: Option<String>,
     db: PathBuf,
     ufvk: String,
     birthday: u32,
@@ -379,6 +567,7 @@ async fn run() -> anyhow::Result<()> {
         }
         Command::Scan {
             lwd,
+            tls_domain,
             db,
             ufvk,
             birthday,
@@ -386,6 +575,7 @@ async fn run() -> anyhow::Result<()> {
         } => {
             scan(ScanArgs {
                 lwd,
+                tls_domain,
                 db,
                 ufvk: ufvk_arg(ufvk)?,
                 birthday,

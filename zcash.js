@@ -1,6 +1,7 @@
 const crypto = require("crypto")
 const fs = require("fs")
 const path = require("path")
+const tls = require("tls")
 const { spawnSync } = require("child_process")
 const grpc = require("@grpc/grpc-js")
 const protoLoader = require("@grpc/proto-loader")
@@ -36,6 +37,12 @@ function isConfigured() {
 }
 
 
+function lwdUrl(scheme) {
+  const host = HOST.includes(":") && !HOST.startsWith("[") ? `[${HOST}]` : HOST
+  return `${scheme}://${host}:${PORT}`
+}
+
+
 function withLock(fn) {
   const run = queue.then(fn, fn)
   queue = run.then(() => undefined, () => undefined)
@@ -61,22 +68,78 @@ function zecScanBin() {
 }
 
 
-function client() {
+function isIpHost(host) {
+  return Boolean(host) && (netIsIp(host) || host.includes(":"))
+}
+
+
+function netIsIp(host) {
+  const parts = host.split(".")
+  return parts.length === 4 && parts.every(p => {
+    const n = Number(p)
+    return Number.isInteger(n) && n >= 0 && n <= 255 && String(n) === p
+  })
+}
+
+
+function peekTlsDomain(host, port, timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      host,
+      port,
+      rejectUnauthorized: false
+    }
+    if (!isIpHost(host)) {
+      opts.servername = host
+    }
+
+    const socket = tls.connect(opts, () => {
+      const cert = socket.getPeerCertificate()
+      socket.end()
+      const san = String(cert.subjectaltname || "")
+      const dns = [...san.matchAll(/DNS:([^,\s]+)/gi)].map(m => m[1])
+      resolve(dns[0] || (cert.subject && cert.subject.CN) || "")
+    })
+
+    socket.on("error", reject)
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy()
+      reject(new Error("tls timeout"))
+    })
+  })
+}
+
+
+function credentialsFor(scheme) {
+  if (scheme === "https") {
+    return grpc.credentials.createSsl(null, null, null, {
+      checkServerIdentity: () => undefined
+    })
+  }
+  return grpc.credentials.createInsecure()
+}
+
+
+function client(scheme = "http") {
 
   if (!isConfigured()) {
     throw new Error("Zcash Node is not configured. Install the Zcash Node app on Umbrel.")
   }
 
-  return new proto.CompactTxStreamer(`${HOST}:${PORT}`, grpc.credentials.createInsecure())
+  return new proto.CompactTxStreamer(`${HOST}:${PORT}`, credentialsFor(scheme))
 
 }
 
 
-function rpc(method, request = {}, timeoutMs = 30000) {
+let lwdInfo = null
+let lwdPending = null
+
+
+function rpcWith(scheme, method, request = {}, timeoutMs = 30000) {
 
   return new Promise((resolve, reject) => {
 
-    const stub = client()
+    const stub = client(scheme)
     const deadline = new Date(Date.now() + timeoutMs)
 
     stub[method](request, { deadline }, (err, res) => {
@@ -98,6 +161,62 @@ function rpc(method, request = {}, timeoutMs = 30000) {
 
   })
 
+}
+
+
+async function detectLwd() {
+  try {
+    await rpcWith("http", "GetLightdInfo", {}, 5000)
+    return { scheme: "http", tlsDomain: "" }
+  } catch {
+    // lightwalletd may be serving TLS (Tailscale / LIGHTWALLETD_TLS_*).
+  }
+
+  let tlsDomain = ""
+  let sawTls = false
+  try {
+    tlsDomain = await peekTlsDomain(HOST, PORT)
+    sawTls = true
+  } catch {
+    // Not a TLS handshake. Fall through and try https RPC anyway.
+  }
+
+  try {
+    await rpcWith("https", "GetLightdInfo", {}, 5000)
+    return { scheme: "https", tlsDomain }
+  } catch (e) {
+    if (sawTls) {
+      return { scheme: "https", tlsDomain }
+    }
+    throw e
+  }
+}
+
+
+function resolveLwd() {
+  if (lwdInfo) {
+    return Promise.resolve(lwdInfo)
+  }
+  if (lwdPending) {
+    return lwdPending
+  }
+
+  lwdPending = detectLwd().then(info => {
+    lwdInfo = info
+    lwdPending = null
+    return info
+  }, err => {
+    lwdPending = null
+    throw err
+  })
+
+  return lwdPending
+}
+
+
+async function rpc(method, request = {}, timeoutMs = 30000) {
+  const info = await resolveLwd()
+  return rpcWith(info.scheme, method, request, timeoutMs)
 }
 
 
@@ -227,21 +346,27 @@ async function getTransparentBalance(wallet) {
 }
 
 
-function getShieldedBalance(wallet) {
+async function getShieldedBalance(wallet) {
   if (!isConfigured()) {
     throw new Error("Zcash Node is not configured. Install the Zcash Node app on Umbrel.")
   }
 
+  const lwd = await resolveLwd()
   fs.mkdirSync(SCAN_DIR, { recursive: true })
 
   const dbPath = path.join(SCAN_DIR, walletFilename(wallet))
-  const result = runZecScan([
+  const args = [
     "scan",
-    "--lwd", `http://${HOST}:${PORT}`,
+    "--lwd", lwdUrl(lwd.scheme),
     "--db", dbPath,
     "--birthday", String(wallet.birthday || NU5_ACTIVATION),
     "--max-seconds", String(SCAN_SECONDS)
-  ], {
+  ]
+  if (lwd.tlsDomain) {
+    args.push("--tls-domain", lwd.tlsDomain)
+  }
+
+  const result = runZecScan(args, {
     timeoutMs: (SCAN_SECONDS + 60) * 1000,
     env: { ZEC_SCAN_UFVK: wallet.ufvk }
   })
