@@ -27,6 +27,7 @@ use zcash_client_sqlite::{
     wallet::init::init_wallet_db,
     WalletDb,
 };
+use zcash_keys::encoding::AddressCodec;
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_protocol::consensus::{BlockHeight, Network, NetworkType, NetworkUpgrade, Parameters};
 
@@ -504,25 +505,85 @@ fn sync_percent(height: u32, birthday: u32, tip: u32) -> f64 {
     (pct * 10.0).round() / 10.0
 }
 
+fn reported_balances(
+    sapling: u64,
+    orchard: u64,
+    wallet_transparent: u64,
+    chain_transparent: Option<u64>,
+) -> (u64, u64) {
+    let transparent = chain_transparent.unwrap_or(wallet_transparent);
+    (
+        transparent,
+        sapling.saturating_add(orchard).saturating_add(transparent),
+    )
+}
+
+fn wallet_transparent_addresses(
+    db: &WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
+) -> anyhow::Result<Vec<String>> {
+    let params = Network::MainNetwork;
+    let mut addresses = Vec::new();
+    for account_id in db.get_account_ids().context("list accounts")? {
+        for (address, _) in db
+            .get_transparent_receivers(account_id, true, true)
+            .context("transparent receivers")?
+        {
+            addresses.push(address.encode(&params));
+        }
+    }
+    addresses.sort();
+    addresses.dedup();
+    Ok(addresses)
+}
+
+async fn chain_transparent_balance(
+    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+    addresses: &[String],
+) -> anyhow::Result<u64> {
+    if addresses.is_empty() {
+        return Ok(0);
+    }
+
+    let mut stream = client
+        .get_address_utxos_stream(service::GetAddressUtxosArg {
+            addresses: addresses.to_vec(),
+            start_height: 0,
+            max_entries: 0,
+        })
+        .await
+        .context("fetch transparent utxos")?
+        .into_inner();
+
+    let mut total = 0u64;
+    while let Some(utxo) = stream.message().await.context("read transparent utxo")? {
+        let value = u64::try_from(utxo.value_zat)
+            .map_err(|_| anyhow!("negative utxo value from lightwalletd"))?;
+        total = total.saturating_add(value);
+    }
+    Ok(total)
+}
+
 fn summary_value(
     db: &WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
     tip: u32,
     birthday: u32,
     timed_out: bool,
+    chain_transparent: Option<u64>,
 ) -> anyhow::Result<serde_json::Value> {
     let policy = ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(1).expect("nonzero"), true);
     let (synced, height, sapling, orchard, transparent, total) =
         if let Some(summary) = db.get_wallet_summary(policy).context("wallet summary")? {
             let mut sapling = 0u64;
             let mut orchard = 0u64;
-            let mut transparent = 0u64;
-            let mut total = 0u64;
+            let mut wallet_transparent = 0u64;
             for balance in summary.account_balances().values() {
                 sapling = sapling.saturating_add(balance.sapling_balance().total().into_u64());
                 orchard = orchard.saturating_add(balance.orchard_balance().total().into_u64());
-                transparent = transparent.saturating_add(balance.unshielded_balance().total().into_u64());
-                total = total.saturating_add(balance.total().into_u64());
+                wallet_transparent = wallet_transparent
+                    .saturating_add(balance.unshielded_balance().total().into_u64());
             }
+            let (transparent, total) =
+                reported_balances(sapling, orchard, wallet_transparent, chain_transparent);
             (
                 summary.is_synced() && !timed_out,
                 u32::from(summary.fully_scanned_height()),
@@ -643,7 +704,30 @@ async fn scan(args: ScanArgs) -> anyhow::Result<()> {
     drop(db);
     drop(cache);
     let db = open_wallet(&args.db)?;
-    println!("{}", summary_value(&db, tip, args.birthday, timed_out)?);
+    // Compact-block sync upserts current UTXOs but never marks spent ones, so a
+    // shield keeps the transparent amount and also adds the new shielded note.
+    let chain_transparent = match wallet_transparent_addresses(&db) {
+        Ok(addresses) if !addresses.is_empty() => {
+            match chain_transparent_balance(&mut client, &addresses).await {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    eprintln!(
+                        "live transparent balance failed ({e}); using scanned transparent outputs"
+                    );
+                    None
+                }
+            }
+        }
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("list transparent addresses failed ({e}); using scanned transparent outputs");
+            None
+        }
+    };
+    println!(
+        "{}",
+        summary_value(&db, tip, args.birthday, timed_out, chain_transparent)?
+    );
     Ok(())
 }
 
@@ -690,5 +774,35 @@ async fn run() -> anyhow::Result<()> {
             })
             .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reported_balances;
+
+    #[test]
+    fn shield_does_not_keep_spent_transparent() {
+        let sapling = 0;
+        let orchard = 99_990_000;
+        let wallet_transparent = 100_000_000;
+        let (transparent, total) =
+            reported_balances(sapling, orchard, wallet_transparent, Some(0));
+        assert_eq!(transparent, 0);
+        assert_eq!(total, orchard);
+    }
+
+    #[test]
+    fn remaining_transparent_is_kept() {
+        let (transparent, total) = reported_balances(0, 50_000_000, 80_000_000, Some(30_000_000));
+        assert_eq!(transparent, 30_000_000);
+        assert_eq!(total, 80_000_000);
+    }
+
+    #[test]
+    fn falls_back_to_wallet_transparent() {
+        let (transparent, total) = reported_balances(1, 2, 3, None);
+        assert_eq!(transparent, 3);
+        assert_eq!(total, 6);
     }
 }
