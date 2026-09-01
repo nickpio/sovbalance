@@ -244,6 +244,14 @@ tbody tr:hover {
     transform: translateX(2px);
 }
 
+tbody tr.view-only-row {
+    cursor: default;
+}
+
+tbody tr.view-only-row:hover {
+    transform: none;
+}
+
 .chevron {
     text-align: right;
     color: var(--muted);

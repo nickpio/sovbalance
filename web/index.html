@@ -10,17 +10,17 @@
   <meta name="application-name" content="sovBalance">
   <meta name="author" content="nickpio">
 
-  <title>sovBalance 1.4.5</title>
+  <title>sovBalance 1.4.6</title>
 
   <link rel="icon" type="image/png" href="/icon.png?v=21">
   <meta name="theme-color" content="#000000">
 
-  <link rel="stylesheet" href="/style.css?v=26">
+  <link rel="stylesheet" href="/style.css?v=27">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-  <script src="/scripts.js?v=30"></script>
+  <script src="/scripts.js?v=31"></script>
 </head>
 
 <body>
@@ -34,7 +34,7 @@
 
     <div class="header-buttons">
       <button class="btn btn-secondary" type="button" onclick="openSettings()">Settings</button>
-      <button class="btn btn-primary" type="button" onclick="openWalletModal()">Add Wallet</button>
+      <button id="addWalletBtn" class="btn btn-primary" type="button" onclick="openWalletModal()" hidden>Add Wallet</button>
       <button class="btn btn-primary" type="button" onclick="load(true)">Refresh</button>
     </div>
 

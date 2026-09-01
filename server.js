@@ -691,6 +691,10 @@ app.get("/wallets", async (req, res) => {
 })
 
 
+app.get("/wallet", (req, res) => {
+  res.json({ ok: true })
+})
+
 
 app.post("/wallet", (req, res) => {
 

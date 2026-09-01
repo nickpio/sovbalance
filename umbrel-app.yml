@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.4.5"
+version: "1.4.6"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
@@ -36,5 +36,6 @@ dependencies:
   - electrs
 gallery: []
 releaseNotes: >-
-  The balance wheel now shows one slice per coin, and Zcash uses a
-  brighter gold so it is easier to tell apart from Bitcoin.
+  Shielded Zcash balances no longer keep spent transparent funds after a
+  shield. The dashboard no longer requires Umbrel login to view balances.
+  Adding, editing, or deleting wallets still does.

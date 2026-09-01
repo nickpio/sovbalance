@@ -21,6 +21,7 @@ var zecUnit = ["zec", "zats"].includes(localStorage.getItem("sovbalance-zec-unit
 const ASSETS = ["btc", "xmr", "zec"]
 const ASSET_NAMES = { btc: "Bitcoin", xmr: "Monero", zec: "Zcash" }
 var enabledAssets = loadAssetFlags("sovbalance-assets", false)
+var canWrite = false
 
 function loadAssetFlags(key, allowEmpty) {
     const fallback = { btc: true, xmr: true, zec: true }
@@ -548,12 +549,20 @@ function renderWallets(wallets) {
             ? `<div class="wallet-error">${w.error}</div>`
             : walletSyncMarkup(w)
 
-        rows += `
+        rows += canWrite
+            ? `
 <tr onclick="editWallet(${w.id})">
 <td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
 <td class="percentage">${perc}%</td>
 <td class="balance" title="${amountTitle(w)}">${formatAmount(w)}</td>
 <td class="chevron">›</td>
+</tr>`
+            : `
+<tr class="view-only-row">
+<td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
+<td class="percentage">${perc}%</td>
+<td class="balance" title="${amountTitle(w)}">${formatAmount(w)}</td>
+<td class="chevron"></td>
 </tr>`
     }
 
@@ -825,6 +834,10 @@ function renderChart() {
 }
 
 
+function loginRequiredError(r, data) {
+    return !r || r.type === "opaqueredirect" || !data
+}
+
 async function saveWalletRequest(url, body) {
 
     try {
@@ -832,10 +845,27 @@ async function saveWalletRequest(url, body) {
         const r = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            redirect: "manual"
         })
 
-        const data = await r.json().catch(() => ({}))
+        if (r.type === "opaqueredirect") {
+            await Swal.fire({
+                icon: "error",
+                title: "Log in to Umbrel to make changes"
+            })
+            return false
+        }
+
+        const data = await r.json().catch(() => null)
+
+        if (loginRequiredError(r, data)) {
+            await Swal.fire({
+                icon: "error",
+                title: "Log in to Umbrel to make changes"
+            })
+            return false
+        }
 
         if (!r.ok) {
             await Swal.fire({
@@ -849,9 +879,10 @@ async function saveWalletRequest(url, body) {
 
     } catch (e) {
 
+        const loginish = !e.message || e.message === "Failed to fetch" || e.name === "TypeError"
         await Swal.fire({
             icon: "error",
-            title: e.message || "Request failed"
+            title: loginish ? "Log in to Umbrel to make changes" : (e.message || "Request failed")
         })
         return false
 
@@ -861,6 +892,8 @@ async function saveWalletRequest(url, body) {
 
 
 async function openWalletModal() {
+
+    if (!canWrite) return
 
     const enabled = enabledAssetList()
     if (!enabled.length) return
@@ -1087,6 +1120,8 @@ spellcheck="false"></textarea>
 
 async function editWallet(id) {
 
+    if (!canWrite) return
+
     const wallet = walletsCache.find(w => w.id === id)
 
     if (!wallet) return
@@ -1221,8 +1256,16 @@ async function editWallet(id) {
                     id: wallet.id,
                     fileBase64: fileBase64 || undefined,
                     payload: keyImagesText || undefined
-                })
-            }).then(r => r.json().then(data => ({ ok: r.ok, data }))).catch(() => ({ ok: false, data: {} }))
+                }),
+                redirect: "manual"
+            }).then(async r => {
+                if (r.type === "opaqueredirect") {
+                    return { ok: false, data: { error: "Log in to Umbrel to make changes" } }
+                }
+                const data = await r.json().catch(() => null)
+                if (!data) return { ok: false, data: { error: "Log in to Umbrel to make changes" } }
+                return { ok: r.ok, data }
+            }).catch(() => ({ ok: false, data: { error: "Log in to Umbrel to make changes" } }))
 
             if (!imported.ok) {
                 await Swal.fire({
@@ -1415,6 +1458,23 @@ function donateModal() {
 }
 
 
+async function probeWriteAccess() {
+    try {
+        const r = await fetch("/wallet", { redirect: "manual" })
+        if (r.type === "opaqueredirect" || !r.ok) return false
+        const data = await r.json().catch(() => null)
+        return !!(data && data.ok)
+    } catch (e) {
+        return false
+    }
+}
+
+function applyWriteUi() {
+    const addBtn = document.getElementById("addWalletBtn")
+    if (addBtn) addBtn.hidden = !canWrite
+    document.body.classList.toggle("view-only", !canWrite)
+}
+
 document.addEventListener('DOMContentLoaded', async function () {
 
     await new Promise(resolve => setTimeout(resolve, 500))
@@ -1428,6 +1488,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     document.getElementById("app_version").innerText = appVersion
 
     document.getElementById("donateBtn").addEventListener("click", donateModal)
+
+    canWrite = await probeWriteAccess()
+    applyWriteUi()
 
     load(false)
 

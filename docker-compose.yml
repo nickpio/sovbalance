@@ -5,9 +5,11 @@ services:
     environment:
       APP_HOST: bitbalance_app_1
       APP_PORT: 3710
+      PROXY_AUTH_WHITELIST: "*"
+      PROXY_AUTH_BLACKLIST: "/wallet,/wallet/*"
 
   app:
-    image: ghcr.io/nickpio/sovbalance/app:1.4.5@sha256:26af6349c11193f3c1b5b4532b531d0115cfde7e1737358fb96a87d675636084
+    image: ghcr.io/nickpio/sovbalance/app:1.4.6
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
