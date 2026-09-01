@@ -506,16 +506,13 @@ fn sync_percent(height: u32, birthday: u32, tip: u32) -> f64 {
 }
 
 fn reported_balances(
-    sapling: u64,
-    orchard: u64,
+    wallet_total: u64,
     wallet_transparent: u64,
     chain_transparent: Option<u64>,
 ) -> (u64, u64) {
     let transparent = chain_transparent.unwrap_or(wallet_transparent);
-    (
-        transparent,
-        sapling.saturating_add(orchard).saturating_add(transparent),
-    )
+    let shielded = wallet_total.saturating_sub(wallet_transparent);
+    (transparent, shielded.saturating_add(transparent))
 }
 
 fn wallet_transparent_addresses(
@@ -571,29 +568,34 @@ fn summary_value(
     chain_transparent: Option<u64>,
 ) -> anyhow::Result<serde_json::Value> {
     let policy = ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(1).expect("nonzero"), true);
-    let (synced, height, sapling, orchard, transparent, total) =
+    let (synced, height, sapling, orchard, ironwood, transparent, total) =
         if let Some(summary) = db.get_wallet_summary(policy).context("wallet summary")? {
             let mut sapling = 0u64;
             let mut orchard = 0u64;
+            let mut ironwood = 0u64;
             let mut wallet_transparent = 0u64;
+            let mut wallet_total = 0u64;
             for balance in summary.account_balances().values() {
                 sapling = sapling.saturating_add(balance.sapling_balance().total().into_u64());
                 orchard = orchard.saturating_add(balance.orchard_balance().total().into_u64());
+                ironwood = ironwood.saturating_add(balance.ironwood_balance().total().into_u64());
                 wallet_transparent = wallet_transparent
                     .saturating_add(balance.unshielded_balance().total().into_u64());
+                wallet_total = wallet_total.saturating_add(balance.total().into_u64());
             }
             let (transparent, total) =
-                reported_balances(sapling, orchard, wallet_transparent, chain_transparent);
+                reported_balances(wallet_total, wallet_transparent, chain_transparent);
             (
                 summary.is_synced() && !timed_out,
                 u32::from(summary.fully_scanned_height()),
                 sapling,
                 orchard,
+                ironwood,
                 transparent,
                 total,
             )
         } else {
-            (false, 0, 0, 0, 0, 0)
+            (false, 0, 0, 0, 0, 0, 0)
         };
 
     Ok(serde_json::json!({
@@ -604,6 +606,7 @@ fn summary_value(
         "percent": sync_percent(height, birthday, tip),
         "sapling": sapling,
         "orchard": orchard,
+        "ironwood": ironwood,
         "transparent": transparent,
         "total": total,
     }))
@@ -783,25 +786,25 @@ mod tests {
 
     #[test]
     fn shield_does_not_keep_spent_transparent() {
-        let sapling = 0;
-        let orchard = 99_990_000;
         let wallet_transparent = 100_000_000;
+        let ironwood = 99_990_000;
         let (transparent, total) =
-            reported_balances(sapling, orchard, wallet_transparent, Some(0));
+            reported_balances(wallet_transparent + ironwood, wallet_transparent, Some(0));
         assert_eq!(transparent, 0);
-        assert_eq!(total, orchard);
+        assert_eq!(total, ironwood);
     }
 
     #[test]
     fn remaining_transparent_is_kept() {
-        let (transparent, total) = reported_balances(0, 50_000_000, 80_000_000, Some(30_000_000));
+        let (transparent, total) =
+            reported_balances(130_000_000, 80_000_000, Some(30_000_000));
         assert_eq!(transparent, 30_000_000);
         assert_eq!(total, 80_000_000);
     }
 
     #[test]
     fn falls_back_to_wallet_transparent() {
-        let (transparent, total) = reported_balances(1, 2, 3, None);
+        let (transparent, total) = reported_balances(6, 3, None);
         assert_eq!(transparent, 3);
         assert_eq!(total, 6);
     }

@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.4.6"
+version: "1.4.7"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
@@ -36,6 +36,5 @@ dependencies:
   - electrs
 gallery: []
 releaseNotes: >-
-  Shielded Zcash balances no longer keep spent transparent funds after a
-  shield. The dashboard no longer requires Umbrel login to view balances.
-  Adding, editing, or deleting wallets still does.
+  Zcash wallets that shielded into Ironwood show the correct balance
+  again. Spent transparent funds are still dropped after a shield.
