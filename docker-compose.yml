@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_BLACKLIST: "/wallet,/wallet/*"
 
   app:
-    image: ghcr.io/nickpio/sovbalance/app:1.4.7@sha256:0b0cfa6c1e57275876412601b30c5c65fd9d464ff57c4067d7fa55eef39bb4f9
+    image: ghcr.io/nickpio/sovbalance/app:1.4.8@sha256:ce20d51d3c8f65a7b7f275fae9e05292270f8f6835f2a639edae1a4f912c9231
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
