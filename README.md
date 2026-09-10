@@ -59,7 +59,7 @@ Limits of the ring analysis:
 
 - A sweep or an exact-amount spend with no change output pays nothing back to the wallet, so it is not seen. Import key images after those.
 - If one ring contains several of the wallet's outputs, all of them are treated as spent. The balance errs low, never high.
-- A payment to the wallet whose ring happens to use one of the wallet's outputs as a decoy can look like a spend. The amount check rejects most of these. Importing key images corrects the rest.
+- A payment to the wallet whose ring happens to use one of the wallet's outputs as a decoy can look like a spend. The amount check rejects it when that output is too small to have funded the payment plus the fee. Importing key images corrects the rest.
 - Pre-RingCT inputs are ignored.
 
 ### Zcash
