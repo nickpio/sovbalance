@@ -463,7 +463,9 @@ async function scanWallet(w) {
   if (walletType(w) === "xmr") {
 
     try {
-      w.balance = await monero.getWalletBalance(w)
+      const result = await monero.getWalletBalance(w)
+      w.balance = result.balance
+      w.autoSpends = result.autoSpends
       delete w.error
     } catch (e) {
       console.error("Error scanning Monero wallet:", e)
@@ -647,6 +649,60 @@ app.get("/prices", async (req, res) => {
 
 
 let walletsRescan = null
+let xmrRefresh = null
+
+const XMR_REFRESH_MS = Math.max(0, parseInt(process.env.XMR_REFRESH_SECONDS || "120", 10) || 0) * 1000
+
+
+async function rescanWallets(filter) {
+
+  await loadWallets();
+
+  for (const w of wallets) {
+    if (!filter || filter(w)) {
+      await scanWallet(w);
+    }
+  }
+
+  try {
+    saveWallets();
+  } catch (e) {
+    console.error("WRITE ERROR:", e)
+  }
+
+}
+
+
+// Monero spends only become visible once the view-only wallet is refreshed
+// again, so keep those wallets current without waiting for a manual Refresh.
+async function refreshXmrWallets() {
+
+  if (walletsRescan || xmrRefresh || !monero.isConfigured()) return
+  if (!wallets.some(w => walletType(w) === "xmr")) return
+
+  xmrRefresh = rescanWallets(w => walletType(w) === "xmr")
+    .catch(e => console.error("Monero refresh error:", e))
+    .finally(() => { xmrRefresh = null })
+
+  await xmrRefresh
+
+}
+
+
+function scheduleXmrRefresh() {
+
+  if (!XMR_REFRESH_MS) return
+
+  setTimeout(async () => {
+    try {
+      await refreshXmrWallets()
+    } finally {
+      scheduleXmrRefresh()
+    }
+  }, XMR_REFRESH_MS)
+
+}
+
 
 app.get("/wallets", async (req, res) => {
 
@@ -658,16 +714,10 @@ app.get("/wallets", async (req, res) => {
       if (!walletsRescan) {
         walletsRescan = (async () => {
           try {
-            await loadWallets();
-            for (const w of wallets) {
-              await scanWallet(w);
+            if (xmrRefresh) {
+              await xmrRefresh
             }
-
-            try {
-              saveWallets();
-            } catch (e) {
-              console.error("WRITE ERROR:", e)
-            }
+            await rescanWallets()
           } finally {
             walletsRescan = null
           }
@@ -675,7 +725,7 @@ app.get("/wallets", async (req, res) => {
       }
 
       await walletsRescan
-    } else if (!walletsRescan) {
+    } else if (!walletsRescan && !xmrRefresh) {
       await loadWallets();
     }
 
@@ -855,6 +905,7 @@ app.post("/wallet/key-images", async (req, res) => {
   try {
     const imported = await monero.importKeyImages(current, payload)
     current.balance = imported.balance
+    current.autoSpends = imported.autoSpends
     delete current.error
     saveWallets()
     res.json({ ok: true, ...imported })
@@ -984,6 +1035,13 @@ async function start() {
   if (monero.isConfigured()) {
     const ok = await monero.ping()
     console.log(ok ? "Monero wallet-rpc connected" : "Monero wallet-rpc not reachable")
+
+    if (monero.daemonConfigured()) {
+      const daemonOk = await monero.daemonPing()
+      console.log(daemonOk ? "Monero Node RPC connected" : "Monero Node RPC not reachable")
+    } else {
+      console.log("Monero Node RPC not configured (spend detection off)")
+    }
   } else {
     console.log("Monero wallet-rpc not configured")
   }
@@ -999,6 +1057,8 @@ async function start() {
     console.log(`bitBalance running on port ${appPort}`)
     console.log(`app Version: ${appVersion}`)
   })
+
+  scheduleXmrRefresh()
 
 }
 
