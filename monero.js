@@ -7,6 +7,19 @@ const HOST = process.env.WALLET_RPC_HOST || ""
 const PORT = parseInt(process.env.WALLET_RPC_PORT || "18083", 10)
 const URL = `http://${HOST}:${PORT}/json_rpc`
 
+// monerod of the Monero Node app. Used to read the rings of transactions that
+// pay a view-only wallet so its own spends can be detected without key images.
+const DAEMON_HOST = process.env.MONERO_DAEMON_HOST || ""
+const DAEMON_PORT = parseInt(process.env.MONERO_DAEMON_PORT || "18081", 10)
+const DAEMON_USER = process.env.MONERO_DAEMON_USER || ""
+const DAEMON_PASS = process.env.MONERO_DAEMON_PASS || ""
+const DAEMON_BATCH = 100
+
+const isDocker = fs.existsSync("/.dockerenv")
+const SPEND_DIR = process.env.MONERO_SPEND_DIR || (isDocker
+  ? "/data/monero"
+  : path.join(__dirname, "data", "monero"))
+
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 let queue = Promise.resolve()
@@ -14,6 +27,11 @@ let queue = Promise.resolve()
 
 function isConfigured() {
   return Boolean(HOST)
+}
+
+
+function daemonConfigured() {
+  return Boolean(DAEMON_HOST)
 }
 
 
@@ -81,6 +99,251 @@ async function rpc(method, params = {}, timeoutMs = 30000) {
   } finally {
     clearTimeout(timer)
   }
+
+}
+
+
+function daemonUrl(endpoint) {
+  const host = DAEMON_HOST.includes(":") && !DAEMON_HOST.startsWith("[") ? `[${DAEMON_HOST}]` : DAEMON_HOST
+  return `http://${host}:${DAEMON_PORT}/${endpoint}`
+}
+
+
+function md5(...parts) {
+  return crypto.createHash("md5").update(parts.join(":")).digest("hex")
+}
+
+
+// monerod answers 401 with one "Digest" challenge per algorithm (MD5, MD5-sess)
+// sharing the same realm and nonce. Keep the first value of each parameter.
+function parseDigestChallenge(header) {
+
+  const text = String(header || "")
+  const start = text.search(/digest\s/i)
+
+  if (start < 0) {
+    return null
+  }
+
+  const params = {}
+  const re = /(\w+)=(?:"([^"]*)"|([^,\s]*))/g
+  let m
+
+  while ((m = re.exec(text.slice(start + 7))) !== null) {
+    const key = m[1].toLowerCase()
+    if (params[key] === undefined) {
+      params[key] = m[2] !== undefined ? m[2] : m[3]
+    }
+  }
+
+  return params.nonce ? params : null
+
+}
+
+
+// RFC 2617 response. monerod's parser wants algorithm/qop/nc as bare tokens
+// (nc exactly 8 hex digits) and every other value quoted.
+function digestAuthorization(challenge, method, uri, creds) {
+
+  const realm = challenge.realm || ""
+  const nonce = challenge.nonce || ""
+  const algorithm = challenge.algorithm || "MD5"
+  const qop = String(challenge.qop || "").split(",").map(s => s.trim()).includes("auth") ? "auth" : ""
+  const nc = creds.nc || "00000001"
+  const cnonce = creds.cnonce || crypto.randomBytes(8).toString("hex")
+
+  let ha1 = md5(creds.user, realm, creds.pass)
+
+  if (/-sess$/i.test(algorithm)) {
+    ha1 = md5(ha1, nonce, cnonce)
+  }
+
+  const ha2 = md5(method, uri)
+  const response = qop ? md5(ha1, nonce, nc, cnonce, qop, ha2) : md5(ha1, nonce, ha2)
+
+  const fields = [
+    `username="${creds.user}"`,
+    `realm="${realm}"`,
+    `nonce="${nonce}"`,
+    `uri="${uri}"`,
+    `algorithm=${algorithm}`,
+    `response="${response}"`
+  ]
+
+  if (qop) {
+    fields.push(`qop=${qop}`, `nc=${nc}`, `cnonce="${cnonce}"`)
+  }
+
+  if (challenge.opaque) {
+    fields.push(`opaque="${challenge.opaque}"`)
+  }
+
+  return "Digest " + fields.join(", ")
+
+}
+
+
+function daemonFetch(url, body, authorization, signal) {
+
+  const headers = { "Content-Type": "application/json" }
+
+  if (authorization) {
+    headers.Authorization = authorization
+  }
+
+  return fetch(url, { method: "POST", headers, body, signal })
+
+}
+
+
+async function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
+
+  if (!daemonConfigured()) {
+    throw new Error("Monero Node RPC is not configured")
+  }
+
+  const url = daemonUrl(endpoint)
+  const body = JSON.stringify(params)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+
+    let res = await daemonFetch(url, body, null, controller.signal)
+
+    // monerod keeps one nonce and resets it whenever an unauthenticated request
+    // arrives (wallet-rpc shares the same daemon), so answer each challenge
+    // fresh instead of reusing a nonce with an incrementing counter.
+    for (let attempt = 0; res.status === 401 && attempt < 3; attempt++) {
+
+      const challenge = parseDigestChallenge(res.headers.get("www-authenticate"))
+      await res.text().catch(() => "")
+
+      if (!challenge) {
+        break
+      }
+
+      if (!DAEMON_USER) {
+        throw new Error("Monero Node RPC requires a login (MONERO_DAEMON_USER / MONERO_DAEMON_PASS)")
+      }
+
+      const authorization = digestAuthorization(challenge, "POST", `/${endpoint}`, {
+        user: DAEMON_USER,
+        pass: DAEMON_PASS
+      })
+
+      res = await daemonFetch(url, body, authorization, controller.signal)
+
+    }
+
+    if (res.status === 401) {
+      throw new Error("Monero Node RPC login was rejected")
+    }
+
+    if (!res.ok) {
+      throw new Error(`Monero Node RPC failed (HTTP ${res.status})`)
+    }
+
+    return await res.json()
+
+  } catch (e) {
+
+    if (e.name === "AbortError") {
+      throw new Error("Monero Node RPC timeout")
+    }
+
+    if (e.message === "fetch failed" || e.code === "ECONNREFUSED") {
+      throw new Error("Monero Node RPC is not reachable")
+    }
+
+    throw e
+
+  } finally {
+    clearTimeout(timer)
+  }
+
+}
+
+
+async function daemonPing() {
+
+  if (!daemonConfigured()) {
+    return false
+  }
+
+  try {
+    const info = await daemonPost("get_info", {}, 5000)
+    return info.status === "OK"
+  } catch {
+    return false
+  }
+
+}
+
+
+// Decoded transaction from monerod get_transactions (decode_as_json).
+// Ring members arrive as relative offsets; the absolute global output index of
+// member i is the sum of offsets 0..i.
+function parseTxJson(text) {
+
+  let json
+
+  try {
+    json = JSON.parse(text)
+  } catch {
+    return null
+  }
+
+  const vins = []
+
+  for (const vin of json.vin || []) {
+
+    if (!vin.key) {
+      return { vins: [], fee: 0 }
+    }
+
+    let absolute = 0
+    const ring = (vin.key.key_offsets || []).map(offset => (absolute += Number(offset)))
+
+    vins.push({ amount: Number(vin.key.amount || 0), ring })
+
+  }
+
+  const fee = Number((json.rct_signatures && json.rct_signatures.txnFee) || 0)
+
+  return { vins, fee }
+
+}
+
+
+async function fetchTxs(txids) {
+
+  const out = new Map()
+
+  for (let i = 0; i < txids.length; i += DAEMON_BATCH) {
+
+    const batch = txids.slice(i, i + DAEMON_BATCH)
+
+    const res = await daemonPost("get_transactions", {
+      txs_hashes: batch,
+      decode_as_json: true,
+      prune: true
+    })
+
+    if (res.status !== "OK") {
+      throw new Error(`Monero Node get_transactions: ${res.status || "failed"}`)
+    }
+
+    for (const tx of res.txs || []) {
+      const parsed = parseTxJson(tx.as_json)
+      if (parsed) {
+        out.set(tx.tx_hash, { ...parsed, inPool: Boolean(tx.in_pool) })
+      }
+    }
+
+  }
+
+  return out
 
 }
 
@@ -189,6 +452,245 @@ async function openOrCreate(wallet) {
 }
 
 
+// Every output the open wallet owns, keyed by global output index. A view-only
+// wallet reports key_image "" for outputs whose key image was never imported.
+async function listOwned() {
+
+  const accounts = await rpc("get_accounts")
+  const owned = new Map()
+
+  for (const account of accounts.subaddress_accounts || []) {
+
+    const res = await rpc("incoming_transfers", {
+      transfer_type: "all",
+      account_index: account.account_index
+    })
+
+    for (const t of res.transfers || []) {
+      const gidx = Number(t.global_index)
+      owned.set(gidx, {
+        gidx,
+        amount: Number(t.amount || 0),
+        txHash: t.tx_hash,
+        spent: Boolean(t.spent),
+        kiKnown: Boolean(t.key_image)
+      })
+    }
+
+  }
+
+  return owned
+
+}
+
+
+// A spend from this wallet pays change back to it, so it shows up as an
+// incoming transaction whose every input ring contains one of our outputs.
+// Returns the global indices of the owned ring members with unknown key
+// images when the transaction is ours, otherwise null.
+function classifySpend(tx, owned, received) {
+
+  if (!tx.vins.length) {
+    return null
+  }
+
+  const matched = new Map()
+
+  for (const vin of tx.vins) {
+
+    if (vin.amount !== 0) {
+      return null
+    }
+
+    let hit = false
+
+    for (const gidx of vin.ring) {
+      const o = owned.get(gidx)
+      if (o && (!o.kiKnown || o.spent)) {
+        matched.set(gidx, o)
+        hit = true
+      }
+    }
+
+    if (!hit) {
+      return null
+    }
+
+  }
+
+  let total = 0
+
+  for (const o of matched.values()) {
+    total += o.amount
+  }
+
+  // The real inputs are among the matched outputs and must cover what came
+  // back to us plus the fee. Rejects most cases where a payment to us merely
+  // picked one of our outputs as a decoy.
+  if (total < received + tx.fee) {
+    return null
+  }
+
+  return [...matched.values()].filter(o => !o.kiKnown).map(o => o.gidx)
+
+}
+
+
+function spendCachePath(wallet) {
+  return path.join(SPEND_DIR, `${walletFilename(wallet)}.json`)
+}
+
+
+function loadSpendCache(wallet) {
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(spendCachePath(wallet), "utf8"))
+    if (parsed && parsed.version === 1 && parsed.txs && typeof parsed.txs === "object") {
+      return parsed
+    }
+  } catch { }
+
+  return { version: 1, txs: {} }
+
+}
+
+
+function saveSpendCache(wallet, cache) {
+  fs.mkdirSync(SPEND_DIR, { recursive: true })
+  fs.writeFileSync(spendCachePath(wallet), JSON.stringify(cache))
+}
+
+
+function clearSpendCache(wallet) {
+  try {
+    fs.unlinkSync(spendCachePath(wallet))
+  } catch { }
+}
+
+
+async function detectSpends(wallet) {
+
+  const owned = await listOwned()
+  const received = new Map()
+
+  for (const o of owned.values()) {
+    if (o.txHash) {
+      received.set(o.txHash, (received.get(o.txHash) || 0) + o.amount)
+    }
+  }
+
+  const transfers = await rpc("get_transfers", { pool: true, all_accounts: true })
+
+  for (const p of transfers.pool || []) {
+    received.set(p.txid, (received.get(p.txid) || 0) + Number(p.amount || 0))
+  }
+
+  const cache = loadSpendCache(wallet)
+  const pending = [...received.keys()].filter(txid => !cache.txs[txid])
+  const txs = await fetchTxs(pending)
+  const results = new Map()
+  let dirty = false
+
+  for (const txid of pending) {
+
+    const tx = txs.get(txid)
+
+    if (!tx) {
+      continue
+    }
+
+    const spent = classifySpend(tx, owned, received.get(txid) || 0)
+    const entry = spent ? { ours: true, spent } : { ours: false }
+
+    results.set(txid, entry)
+
+    // Rings only reference earlier outputs, so a confirmed verdict is final.
+    if (!tx.inPool) {
+      cache.txs[txid] = entry
+      dirty = true
+    }
+
+  }
+
+  if (dirty) {
+    saveSpendCache(wallet, cache)
+  }
+
+  for (const [txid, entry] of Object.entries(cache.txs)) {
+    if (received.has(txid) && !results.has(txid)) {
+      results.set(txid, entry)
+    }
+  }
+
+  const spentIdx = new Set()
+  let count = 0
+
+  for (const entry of results.values()) {
+
+    if (!entry.ours) {
+      continue
+    }
+
+    const active = entry.spent.filter(gidx => {
+      const o = owned.get(gidx)
+      return o && !o.kiKnown && !o.spent
+    })
+
+    if (active.length) {
+      count++
+      active.forEach(gidx => spentIdx.add(gidx))
+    }
+
+  }
+
+  let amount = 0
+
+  for (const gidx of spentIdx) {
+    amount += owned.get(gidx).amount
+  }
+
+  return { count, amount }
+
+}
+
+
+// Balance of the open wallet with detected spends removed. Detection failures
+// never fail the scan: the plain view-only balance is returned with the error.
+async function computeBalance(wallet) {
+
+  const result = await rpc("get_balance", { all_accounts: true })
+  const balance = Number(result.balance || 0)
+
+  if (!daemonConfigured()) {
+    return {
+      balance: balance / 1e12,
+      autoSpends: { error: "Monero Node RPC is not configured" }
+    }
+  }
+
+  try {
+
+    const spends = await detectSpends(wallet)
+
+    return {
+      balance: Math.max(0, balance - spends.amount) / 1e12,
+      autoSpends: { count: spends.count, xmr: spends.amount / 1e12 }
+    }
+
+  } catch (e) {
+
+    console.error("Monero spend detection:", e.message)
+
+    return {
+      balance: balance / 1e12,
+      autoSpends: { error: e.message }
+    }
+
+  }
+
+}
+
+
 async function getWalletBalance(wallet) {
 
   return withLock(async () => {
@@ -200,13 +702,13 @@ async function getWalletBalance(wallet) {
 
       await rpc("refresh", {}, 30 * 60 * 1000)
 
-      const result = await rpc("get_balance", { all_accounts: true })
+      const result = await computeBalance(wallet)
 
       try {
         await rpc("store")
       } catch { }
 
-      return Number(result.balance || 0) / 1e12
+      return result
 
     } finally {
 
@@ -566,10 +1068,15 @@ async function importKeyImages(wallet, payload) {
         await rpc("store")
       } catch { }
 
-      const result = await rpc("get_balance", { all_accounts: true })
+      // Key images settle which outputs are spent, so redo the ring analysis
+      // with the outputs that are still view-only.
+      clearSpendCache(wallet)
+
+      const { balance, autoSpends } = await computeBalance(wallet)
 
       return {
-        balance: Number(result.balance || 0) / 1e12,
+        balance,
+        autoSpends,
         spent: Number(imported.spent || 0) / 1e12,
         unspent: Number(imported.unspent || 0) / 1e12,
         height: imported.height
@@ -591,6 +1098,8 @@ async function importKeyImages(wallet, payload) {
 module.exports = {
   isConfigured,
   ping,
+  daemonConfigured,
+  daemonPing,
   validateMoneroWallet,
   getWalletBalance,
   parseKeyImages,
@@ -649,5 +1158,92 @@ if (require.main === module && process.argv[2] === "--self-test") {
   }
 
   console.log("key image self-test ok")
+
+  // RFC 2617 section 3.5 example
+  const rfcChallenge = parseDigestChallenge(
+    'Digest realm="testrealm@host.com", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41"'
+  )
+  const rfcAuth = digestAuthorization(rfcChallenge, "GET", "/dir/index.html", {
+    user: "Mufasa",
+    pass: "Circle Of Life",
+    nc: "00000001",
+    cnonce: "0a4f113b"
+  })
+
+  if (!rfcAuth.includes('response="6629fae49393a05397450978507c4ef1"') || !rfcAuth.includes("qop=auth, nc=00000001") || !rfcAuth.includes('opaque="5ccc069c403ebaf9f0171e9517f40e41"')) {
+    throw new Error("digest response failed: " + rfcAuth)
+  }
+
+  const monerodChallenge = parseDigestChallenge(
+    'Digest qop="auth",algorithm=MD5,realm="monero-rpc",nonce="n0nce",stale=false, Digest qop="auth",algorithm=MD5-sess,realm="monero-rpc",nonce="n0nce",stale=false'
+  )
+
+  if (monerodChallenge.algorithm !== "MD5" || monerodChallenge.realm !== "monero-rpc" || monerodChallenge.nonce !== "n0nce") {
+    throw new Error("monerod challenge parse failed")
+  }
+
+  const XMR = 1e12
+  const txJson = JSON.stringify({
+    vin: [{ key: { amount: 0, key_offsets: [100, 5, 3], k_image: "00" } }],
+    vout: [],
+    rct_signatures: { txnFee: 0.01 * XMR }
+  })
+  const decoded = parseTxJson(txJson)
+
+  if (decoded.vins.length !== 1 || decoded.vins[0].ring.join(",") !== "100,105,108" || decoded.fee !== 0.01 * XMR) {
+    throw new Error("tx offsets parse failed")
+  }
+
+  if (parseTxJson(JSON.stringify({ vin: [{ gen: { height: 1 } }] })).vins.length !== 0) {
+    throw new Error("coinbase parse failed")
+  }
+
+  const owned = new Map([
+    [100, { gidx: 100, amount: 5 * XMR, txHash: "a", spent: false, kiKnown: false }],
+    [200, { gidx: 200, amount: 2 * XMR, txHash: "b", spent: false, kiKnown: false }],
+    [300, { gidx: 300, amount: 1 * XMR, txHash: "c", spent: false, kiKnown: false }],
+    [400, { gidx: 400, amount: 3 * XMR, txHash: "d", spent: false, kiKnown: true }],
+    [500, { gidx: 500, amount: 4 * XMR, txHash: "e", spent: true, kiKnown: true }]
+  ])
+  const fee = 0.01 * XMR
+  const ringWith = gidx => [gidx - 7, gidx, gidx + 9]
+
+  const spend = classifySpend({ vins: [{ amount: 0, ring: ringWith(100) }], fee }, owned, 3 * XMR)
+  if (!spend || spend.join(",") !== "100") {
+    throw new Error("single-input spend not detected")
+  }
+
+  const multi = classifySpend({ vins: [{ amount: 0, ring: ringWith(100) }, { amount: 0, ring: ringWith(200) }], fee }, owned, 6 * XMR)
+  if (!multi || multi.join(",") !== "100,200") {
+    throw new Error("multi-input spend not detected")
+  }
+
+  if (classifySpend({ vins: [{ amount: 0, ring: ringWith(100) }, { amount: 0, ring: [1, 2, 3] }], fee }, owned, 1 * XMR) !== null) {
+    throw new Error("tx with a foreign input must not be ours")
+  }
+
+  // A payment to us that used our 1 XMR output as a decoy cannot be a spend of 4 XMR
+  if (classifySpend({ vins: [{ amount: 0, ring: ringWith(300) }], fee }, owned, 4 * XMR) !== null) {
+    throw new Error("decoy false positive not rejected")
+  }
+
+  if (classifySpend({ vins: [{ amount: 0, ring: ringWith(400) }], fee }, owned, 1 * XMR) !== null) {
+    throw new Error("known-unspent output must not match")
+  }
+
+  const withKnown = classifySpend({ vins: [{ amount: 0, ring: ringWith(500) }, { amount: 0, ring: ringWith(300) }], fee }, owned, 1 * XMR)
+  if (!withKnown || withKnown.join(",") !== "300") {
+    throw new Error("known-spent output must match without being re-counted")
+  }
+
+  if (classifySpend({ vins: [{ amount: 10 * XMR, ring: ringWith(100) }], fee }, owned, 1 * XMR) !== null) {
+    throw new Error("pre-RingCT input must not match")
+  }
+
+  if (classifySpend({ vins: [], fee: 0 }, owned, 1 * XMR) !== null) {
+    throw new Error("coinbase must not be ours")
+  }
+
+  console.log("spend detection self-test ok")
 
 }
