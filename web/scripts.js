@@ -150,7 +150,14 @@ function formatAmount(w) {
 function amountTitle(w) {
     const asset = walletAsset(w)
     if (asset === "xmr") {
-        return "View-only incoming balance. Spent outputs still count until key images are imported."
+        const auto = w.autoSpends
+        if (auto && auto.error) {
+            return "View-only balance. Spend detection unavailable: " + auto.error
+        }
+        if (auto && auto.count) {
+            return `View-only balance. ${auto.count} spend${auto.count === 1 ? "" : "s"} detected automatically (${formatXmrAmount(auto.xmr)} removed).`
+        }
+        return "View-only balance. Spends are detected automatically from your Monero Node."
     }
     if (asset === "zec") {
         return zecUnit === "zats"
@@ -635,6 +642,25 @@ async function load(rescan = true) {
 }
 
 
+// The server refreshes Monero wallets on its own; pick those balances up
+// without a manual Refresh. Only re-render when something changed so the
+// chart does not re-animate every poll.
+async function pollWallets() {
+
+    if (scanning) return
+
+    try {
+        const data = await fetchWallets(false)
+        if (JSON.stringify(data) !== JSON.stringify(walletsCache)) {
+            renderWallets(data)
+        }
+    } catch (e) {
+        console.error("poll error", e)
+    }
+
+}
+
+
 function clearTable() {
     document.querySelector("#t tbody").innerHTML = ""
     document.getElementById("totalTop").innerText = "-"
@@ -939,7 +965,7 @@ maxlength="64"
 placeholder="Private view key"
 spellcheck="false"></textarea>
 <input id="swal-restore" class="swal2-input" placeholder="Restore height (0 = genesis)" inputmode="numeric">
-<div class="wallet-hint">View-only wallets can see received outputs, including subaddresses. Spent funds still count until you import key images from the spend wallet (Edit Wallet after a spend). Use a restore height from around when the wallet was created to avoid a full-chain scan.</div>
+<div class="wallet-hint">View-only wallets can see received outputs, including subaddresses. Spends are detected automatically from your Monero Node when change returns to the wallet; key images are only needed after a sweep with no change output. Use a restore height from around when the wallet was created to avoid a full-chain scan.</div>
 </div>
 
 <div id="zec-fields" style="display:none">
@@ -1141,7 +1167,7 @@ async function editWallet(id) {
 <textarea id="swal-address" class="swal2-textarea" rows="2">${wallet.address || ""}</textarea>
 <textarea id="swal-viewkey" class="swal2-textarea" rows="2">${wallet.viewKey || ""}</textarea>
 <input id="swal-restore" class="swal2-input" value="${wallet.restoreHeight || 0}" inputmode="numeric">
-<div class="wallet-hint">After you spend, export key images from the wallet that has the spend key (Monero GUI: Settings → Wallet → Export key images; Feather: File → Export → Key images) and attach that file here. Incoming funds do not need this.</div>
+<div class="wallet-hint">Spends are detected automatically. Key images are optional: import them after a sweep with no change output, or to reconcile the balance exactly (Monero GUI: Settings → Wallet → Export key images; Feather: File → Export → Key images). Incoming funds do not need this.</div>
 <input id="swal-keyimages" class="keyimages-file" type="file">
 <textarea id="swal-keyimages-text" class="swal2-textarea" rows="3" placeholder="Or paste key images JSON" spellcheck="false"></textarea>
 ` : isZecShielded ? `
@@ -1495,5 +1521,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     load(false)
 
     setInterval(updatePrices, 60 * 1000)
+    setInterval(pollWallets, 30 * 1000)
 
 })
