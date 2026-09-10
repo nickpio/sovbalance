@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.4.8"
+version: "1.5.0"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
@@ -36,5 +36,7 @@ dependencies:
   - electrs
 gallery: []
 releaseNotes: >-
-  Monero now shows the official logo in the prices panel instead of
-  the placeholder icon.
+  Monero spends are now detected automatically. sovBalance reads the
+  input rings of the wallet's incoming transactions from your Monero
+  Node and removes spent outputs without key images. Monero wallets
+  also refresh in the background, so balances update on their own.
