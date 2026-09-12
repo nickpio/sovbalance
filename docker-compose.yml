@@ -9,17 +9,18 @@ services:
       PROXY_AUTH_BLACKLIST: "/wallet,/wallet/*"
 
   app:
-    image: ghcr.io/nickpio/sovbalance/app:1.4.8@sha256:ce20d51d3c8f65a7b7f275fae9e05292270f8f6835f2a639edae1a4f912c9231
+    image: ghcr.io/nickpio/sovbalance/app:1.5.0
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
       - wallet_rpc
     environment:
       PORT: 3710
-      ELECTRUM_HOST: $APP_ELECTRS_NODE_IP
-      ELECTRUM_PORT: $APP_ELECTRS_NODE_PORT
+      ELECTRUM_HOST: ${APP_ELECTRS_NODE_IP:-}
+      ELECTRUM_PORT: ${APP_ELECTRS_NODE_PORT:-50001}
       WALLET_RPC_HOST: wallet_rpc
       WALLET_RPC_PORT: 18083
+      MONERO_NODE_HOST: ${APP_MONERO_NODE_IP:-}
       ZCASH_LWD_HOST: ${APP_ZCASH_NODE_IP:-}
       ZCASH_LWD_PORT: ${APP_ZCASH_WALLET_PORT:-9067}
     volumes:
