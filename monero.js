@@ -6,6 +6,9 @@ const { spawnSync } = require("child_process")
 const HOST = process.env.WALLET_RPC_HOST || ""
 const PORT = parseInt(process.env.WALLET_RPC_PORT || "18083", 10)
 const URL = `http://${HOST}:${PORT}/json_rpc`
+// On Umbrel the wallet-rpc sidecar always runs, so MONERO_NODE_HOST (empty when
+// the Monero Node app is not installed) decides whether Monero is available.
+const NODE_HOST = process.env.MONERO_NODE_HOST
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -13,6 +16,9 @@ let queue = Promise.resolve()
 
 
 function isConfigured() {
+  if (NODE_HOST !== undefined && !NODE_HOST) {
+    return false
+  }
   return Boolean(HOST)
 }
 
