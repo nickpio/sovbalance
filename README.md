@@ -9,7 +9,7 @@
 
 Track Bitcoin, Monero, and Zcash wallets on your Umbrel. Add as many as you want. The page shows each asset and a combined USD total.
 
-Balances come from your Electrs, and from Monero Node or Zcash Node if those apps are installed. Nobody else's balance API is in the path.
+Balances come from Electrs, Monero Node, and Zcash Node, whichever of those apps are installed. sovBalance detects them on startup and only shows the matching currencies. Nobody else's balance API is in the path.
 
 Bitcoin: XPUB / YPUB / ZPUB
 Monero: primary address + private view key
@@ -93,15 +93,16 @@ Incoming funds do not need this. Outputs covered by imported key images are sett
 ## Requirements
 
 - Umbrel
-- Electrs installed
-- [Monero Node](https://apps.umbrel.com/app/monero) only if you track Monero wallets
-- [Zcash Node](https://github.com/nickpio/umbrel-zcash) only if you track Zcash wallets
+- At least one of:
+  [Electrs](https://apps.umbrel.com/app/electrs) for Bitcoin wallets,
+  [Monero Node](https://apps.umbrel.com/app/monero) for Monero wallets,
+  [Zcash Node](https://github.com/nickpio/umbrel-zcash) for Zcash wallets
 
 ---
 
 ## Installation
 
-Install sovBalance from the Umbrel App Store. It connects to Electrs on its own. Install Monero Node and/or Zcash Node and restart sovBalance if you want those wallets.
+Install sovBalance from the Umbrel App Store. It detects Electrs, Monero Node, and Zcash Node on startup and shows the currencies they serve. Install or remove a node app and restart sovBalance to update the list.
 
 ---
 
@@ -167,7 +168,7 @@ Zcash Node
 
 ## Umbrel
 
-- Electrs via `$APP_ELECTRS_NODE_IP`
+- Electrs via `$APP_ELECTRS_NODE_IP` and `$APP_ELECTRS_NODE_PORT` when that app is installed
 - Monero Node via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed. The wallet-rpc sidecar syncs from it, and the app itself queries it (`MONERO_DAEMON_*`, HTTP digest auth) for spend detection
 - Zcash Node via `$APP_ZCASH_NODE_IP` and `$APP_ZCASH_WALLET_PORT` when that app is installed
 - Local `simple-monero-wallet-rpc` sidecar for view-only scanning
@@ -176,7 +177,7 @@ Zcash Node
 - Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
 - Monero spend-detection caches in `${APP_DATA_DIR}/data/monero`
 - Shielded Zcash scan databases in `${APP_DATA_DIR}/data/zcash`
-- Depends on the `electrs` Umbrel app. Monero Node and Zcash Node are optional
+- No required Umbrel dependencies. `exports.sh` sources the Electrs, Monero Node, and Zcash Node exports when those apps are installed, and `GET /nodes` reports which ones were found
 
 ---
 
@@ -188,9 +189,9 @@ cargo build --release --manifest-path zecscan/Cargo.toml
 node server.js
 ```
 
-`zcash.js` looks for `zec-scan` at `$ZEC_SCAN`, `/usr/local/bin/zec-scan`, or `zecscan/target/release/zec-scan`. Shielded wallets need `ZCASH_LWD_HOST` (and optional `ZCASH_LWD_PORT`, default 9067) pointing at lightwalletd.
+Bitcoin wallets need `ELECTRUM_HOST` (and optional `ELECTRUM_PORT`, default 50001) pointing at an Electrum server. `zcash.js` looks for `zec-scan` at `$ZEC_SCAN`, `/usr/local/bin/zec-scan`, or `zecscan/target/release/zec-scan`. Shielded wallets need `ZCASH_LWD_HOST` (and optional `ZCASH_LWD_PORT`, default 9067) pointing at lightwalletd. Currencies whose variables are unset are hidden in the UI.
 
-Monero wallets need `WALLET_RPC_HOST` / `WALLET_RPC_PORT` for a `monero-wallet-rpc`, plus `MONERO_DAEMON_HOST` / `MONERO_DAEMON_PORT` / `MONERO_DAEMON_USER` / `MONERO_DAEMON_PASS` for the monerod it syncs from so spends can be detected. Without the daemon variables the plain view-only balance is shown. `node monero.js --self-test` exercises the key image parser and the spend classifier.
+Monero wallets need `WALLET_RPC_HOST` / `WALLET_RPC_PORT` for a `monero-wallet-rpc`, plus `MONERO_DAEMON_HOST` / `MONERO_DAEMON_PORT` / `MONERO_DAEMON_USER` / `MONERO_DAEMON_PASS` for the monerod it syncs from so spends can be detected. Leave the daemon variables unset for the plain view-only balance; setting `MONERO_DAEMON_HOST` to an empty string (as the Umbrel compose does when Monero Node is not installed) hides Monero entirely. `node monero.js --self-test` exercises the key image parser and the spend classifier.
 
 ## Developers
 

@@ -6,10 +6,13 @@ const { spawnSync } = require("child_process")
 const HOST = process.env.WALLET_RPC_HOST || ""
 const PORT = parseInt(process.env.WALLET_RPC_PORT || "18083", 10)
 const URL = `http://${HOST}:${PORT}/json_rpc`
-
 // monerod of the Monero Node app. Used to read the rings of transactions that
 // pay a view-only wallet so its own spends can be detected without key images.
-const DAEMON_HOST = process.env.MONERO_DAEMON_HOST || ""
+// On Umbrel the wallet-rpc sidecar always runs, so MONERO_DAEMON_HOST being set
+// but empty (Monero Node app not installed) also hides Monero. Unset means local
+// dev without spend detection.
+const DAEMON_HOST_RAW = process.env.MONERO_DAEMON_HOST
+const DAEMON_HOST = DAEMON_HOST_RAW || ""
 const DAEMON_PORT = parseInt(process.env.MONERO_DAEMON_PORT || "18081", 10)
 const DAEMON_USER = process.env.MONERO_DAEMON_USER || ""
 const DAEMON_PASS = process.env.MONERO_DAEMON_PASS || ""
@@ -26,6 +29,9 @@ let queue = Promise.resolve()
 
 
 function isConfigured() {
+  if (DAEMON_HOST_RAW !== undefined && !DAEMON_HOST_RAW) {
+    return false
+  }
   return Boolean(HOST)
 }
 
