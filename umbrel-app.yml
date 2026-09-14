@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.5.1"
+version: "1.6.0"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
