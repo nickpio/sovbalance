@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.4.8"
+version: "1.5.0"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
@@ -15,9 +15,9 @@ description: >-
   lightwalletd.
 
 
-  Connects to your local Electrs, optional Monero Node, and optional
-  Zcash Node apps for maximum privacy, without relying on third-party
-  balance APIs.
+  Automatically detects which node apps you have installed (Electrs,
+  Monero Node, Zcash Node) and shows the matching currencies. Install
+  any one of them to get started. No third-party balance APIs.
 
 
   Stop checking balances on block explorers. Your wallets. Your node. Your privacy.
@@ -32,9 +32,10 @@ support: https://github.com/egzola/bitbalance/issues
 submitter: egzola
 submission: https://github.com/getumbrel/umbrel-apps/pull/5082
 path: ""
-dependencies:
-  - electrs
+dependencies: []
 gallery: []
 releaseNotes: >-
-  Monero now shows the official logo in the prices panel instead of
-  the placeholder icon.
+  Electrs is no longer required. sovBalance detects which node apps are
+  installed (Electrs, Monero Node, Zcash Node) and only shows the
+  currencies they serve, so you can track Monero or Zcash without
+  running a Bitcoin node.

@@ -17,7 +17,7 @@ const isDocker = fs.existsSync("/.dockerenv");
 
 const appVersion = require('./package.json').version || "1.0.0";
 
-const HOST = process.env.ELECTRUM_HOST || "127.0.0.1";
+const HOST = process.env.ELECTRUM_HOST || "";
 const PORT = parseInt(process.env.ELECTRUM_PORT || "50001", 10);
 
 const appPort = process.env.PORT || 3710;
@@ -132,6 +132,11 @@ function walletType(w) {
 }
 
 
+function electrumConfigured() {
+  return Boolean(HOST)
+}
+
+
 function closeElectrum() {
   if (!electrum) return
   try {
@@ -151,7 +156,7 @@ function scheduleElectrumReconnect() {
 
 async function connectElectrum() {
 
-  if (electrumConnecting) return
+  if (!electrumConfigured() || electrumConnecting) return
   electrumConnecting = true
 
   if (electrumReconnectTimer) {
@@ -494,6 +499,11 @@ async function scanWallet(w) {
     return
   }
 
+  if (!electrumConfigured()) {
+    w.error = "Electrs is not installed. Install the Electrs app on Umbrel."
+    return
+  }
+
   w.balance = await getWalletBalance(w.xpub)
   delete w.error
 
@@ -505,6 +515,14 @@ app.get("/appversion", async (req, res) => {
 
 app.get("/health", async (req, res) => {
   res.json({ ok: true })
+});
+
+app.get("/nodes", (req, res) => {
+  res.json({
+    btc: electrumConfigured(),
+    xmr: monero.isConfigured(),
+    zec: zcash.isConfigured()
+  })
 });
 
 
@@ -979,7 +997,11 @@ function withTimeout(p, ms = 5000) {
 
 async function start() {
 
-  await connectElectrum()
+  if (electrumConfigured()) {
+    await connectElectrum()
+  } else {
+    console.log("Electrs not configured")
+  }
 
   if (monero.isConfigured()) {
     const ok = await monero.ping()

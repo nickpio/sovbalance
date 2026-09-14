@@ -20,7 +20,10 @@ var zecUnit = ["zec", "zats"].includes(localStorage.getItem("sovbalance-zec-unit
     : "zec"
 const ASSETS = ["btc", "xmr", "zec"]
 const ASSET_NAMES = { btc: "Bitcoin", xmr: "Monero", zec: "Zcash" }
+const NODE_NAMES = { btc: "Electrs", xmr: "Monero Node", zec: "Zcash Node" }
 var enabledAssets = loadAssetFlags("sovbalance-assets", false)
+// null until /nodes answers; every asset counts as available until then
+var availableAssets = null
 var canWrite = false
 
 function loadAssetFlags(key, allowEmpty) {
@@ -107,12 +110,33 @@ function walletAsset(w) {
     return "btc"
 }
 
+function assetAvailable(asset) {
+    return !availableAssets || !!availableAssets[asset]
+}
+
+function availableAssetList() {
+    return ASSETS.filter(assetAvailable)
+}
+
 function assetEnabled(asset) {
-    return !!enabledAssets[asset]
+    return assetAvailable(asset) && !!enabledAssets[asset]
 }
 
 function enabledAssetList() {
     return ASSETS.filter(assetEnabled)
+}
+
+async function loadNodes() {
+    try {
+        const data = await fetchJson("/nodes", 10000)
+        availableAssets = { btc: !!data.btc, xmr: !!data.xmr, zec: !!data.zec }
+    } catch (e) {
+        console.error("nodes error", e)
+        return
+    }
+    if (availableAssetList().length && !enabledAssetList().length) {
+        ASSETS.forEach(asset => { enabledAssets[asset] = assetAvailable(asset) })
+    }
 }
 
 function visibleWallets(wallets = walletsCache) {
@@ -332,7 +356,7 @@ function setZecUnit(next) {
 }
 
 function toggleAsset(asset) {
-    if (!ASSETS.includes(asset)) return
+    if (!ASSETS.includes(asset) || !assetAvailable(asset)) return
     if (enabledAssets[asset] && enabledAssetList().length === 1) return
     enabledAssets[asset] = !enabledAssets[asset]
     saveAssetFlags("sovbalance-assets", enabledAssets)
@@ -342,12 +366,17 @@ function toggleAsset(asset) {
 function syncSettingsTabs() {
     document.querySelectorAll("[data-setting]").forEach(btn => {
         const on = (btn.dataset.setting === "fiat" && btn.dataset.value === fiatCurrency)
-            || (btn.dataset.setting === "asset" && enabledAssets[btn.dataset.value])
+            || (btn.dataset.setting === "asset" && assetEnabled(btn.dataset.value))
             || (btn.dataset.setting === "btcUnit" && btn.dataset.value === btcUnit)
             || (btn.dataset.setting === "xmrUnit" && btn.dataset.value === xmrUnit)
             || (btn.dataset.setting === "zecUnit" && btn.dataset.value === zecUnit)
         btn.classList.toggle("active", on)
         btn.setAttribute("aria-pressed", on ? "true" : "false")
+        if (btn.dataset.setting === "asset") {
+            const missing = !assetAvailable(btn.dataset.value)
+            btn.disabled = missing
+            btn.title = missing ? `Install the ${NODE_NAMES[btn.dataset.value]} app to track ${ASSET_NAMES[btn.dataset.value]}` : ""
+        }
     })
     document.querySelectorAll("[data-asset-row]").forEach(row => {
         row.hidden = !assetEnabled(row.dataset.assetRow)
@@ -518,9 +547,12 @@ function renderWallets(wallets) {
     const visible = visibleWallets(wallets)
 
     if (visible.length === 0) {
+        const empty = !availableAssetList().length
+            ? "ℹ️ No node apps detected. Install Electrs, Monero Node, or Zcash Node to track wallets"
+            : wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"
         document.querySelector("#t tbody").innerHTML = `
         <tr>
-          <td colspan="4">${wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"}</td>
+          <td colspan="4">${empty}</td>
         </tr>`
         renderChart()
         return
@@ -1471,7 +1503,7 @@ async function probeWriteAccess() {
 
 function applyWriteUi() {
     const addBtn = document.getElementById("addWalletBtn")
-    if (addBtn) addBtn.hidden = !canWrite
+    if (addBtn) addBtn.hidden = !canWrite || !availableAssetList().length
     document.body.classList.toggle("view-only", !canWrite)
 }
 
@@ -1490,6 +1522,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     document.getElementById("donateBtn").addEventListener("click", donateModal)
 
     canWrite = await probeWriteAccess()
+    await loadNodes()
     applyWriteUi()
 
     load(false)
