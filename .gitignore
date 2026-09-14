@@ -1,3 +1,4 @@
 vendor/cryptonight/cn-slow-hash
 node_modules/
 zecscan/target/
+data/monero/

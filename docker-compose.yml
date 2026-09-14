@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_BLACKLIST: "/wallet,/wallet/*"
 
   app:
-    image: ghcr.io/nickpio/sovbalance/app:1.5.1@sha256:37b9d2ac10b6586bbe57117cef7085316edf9ede5d8a59a11dd1aab86814ff03
+    image: ghcr.io/nickpio/sovbalance/app:1.6.0
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
@@ -20,7 +20,12 @@ services:
       ELECTRUM_PORT: ${APP_ELECTRS_NODE_PORT:-50001}
       WALLET_RPC_HOST: wallet_rpc
       WALLET_RPC_PORT: 18083
-      MONERO_NODE_HOST: ${APP_MONERO_NODE_IP:-}
+      # monerod of the Monero Node app, used to detect view-only spends.
+      # An empty MONERO_DAEMON_HOST also tells the app Monero Node is not installed.
+      MONERO_DAEMON_HOST: ${APP_MONERO_NODE_IP:-}
+      MONERO_DAEMON_PORT: ${APP_MONERO_RPC_PORT:-18081}
+      MONERO_DAEMON_USER: ${APP_MONERO_RPC_USER:-}
+      MONERO_DAEMON_PASS: ${APP_MONERO_RPC_PASS:-}
       ZCASH_LWD_HOST: ${APP_ZCASH_NODE_IP:-}
       ZCASH_LWD_PORT: ${APP_ZCASH_WALLET_PORT:-9067}
     volumes:

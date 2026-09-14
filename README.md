@@ -49,7 +49,18 @@ Addresses are derived locally and scanned against your Electrum server (Electrs,
 |-----|------|
 | View-only | Mainnet primary address (starts with `4`, 95 characters) + private view key |
 
-View-only wallets can see received outputs, including subaddresses. Spent funds still count toward the balance until you import key images. Set a restore height from around when the wallet was created so you skip a full-chain scan.
+View-only wallets can see received outputs, including subaddresses. Set a restore height from around when the wallet was created so you skip a full-chain scan.
+
+Spends are detected automatically. A view key cannot compute key images, so the wallet itself never sees an outgoing transaction. sovBalance instead looks at every transaction that pays the wallet and asks your Monero Node for its input rings. A spend from the wallet returns change to it, and every one of its input rings must contain one of the wallet's own outputs. When that holds, and the matched outputs can cover the change plus the fee, the transaction is treated as a spend and the matched outputs are removed from the balance. Verdicts for confirmed transactions are cached under `data/monero`, and mempool transactions are checked too, so a spend shows up about as soon as it is broadcast.
+
+Monero wallets are refreshed on a timer (`XMR_REFRESH_SECONDS`, default 120, `0` disables) and the page picks up new balances without a manual Refresh.
+
+Limits of the ring analysis:
+
+- A sweep or an exact-amount spend with no change output pays nothing back to the wallet, so it is not seen. Import key images after those.
+- If one ring contains several of the wallet's outputs, all of them are treated as spent. The balance errs low, never high.
+- A payment to the wallet whose ring happens to use one of the wallet's outputs as a decoy can look like a spend. The amount check rejects it when that output is too small to have funded the payment plus the fee. Importing key images corrects the rest.
+- Pre-RingCT inputs are ignored.
 
 ### Zcash
 
@@ -66,7 +77,7 @@ Birthday height defaults to NU5 activation (1,687,104, May 2022). Set it earlier
 
 ## Key images
 
-A view-only wallet cannot tell which outputs have been spent. After you spend from the wallet that has the spend key, export key images and import them in sovBalance so the balance can drop.
+Key images are optional. Import them after a sweep with no change output, or whenever you want the balance reconciled exactly.
 
 1. Spend from your full / spend wallet as usual
 2. Export key images from that same spend wallet
@@ -75,7 +86,7 @@ A view-only wallet cannot tell which outputs have been spent. After you spend fr
 3. In sovBalance, open Edit Wallet on the matching Monero wallet
 4. Attach the export file, or paste `export_key_images` JSON, and save
 
-Incoming funds do not need this. Re-export and import again after each spend. The file is encrypted with the view key, so it must come from the spend wallet for the same address.
+Incoming funds do not need this. Outputs covered by imported key images are settled by the wallet; the ring analysis only applies to outputs received after the export. The file is encrypted with the view key, so it must come from the spend wallet for the same address.
 
 ---
 
@@ -105,9 +116,7 @@ Install sovBalance from the Umbrel App Store. It detects your Electrum server (E
    Monero: paste a primary address, private view key, and optional restore height
    Zcash: paste a transparent t1 / t3 address, or a `uview1…` viewing key and optional birthday height
 
-Balances refresh from your node.
-
-After a Monero spend, import key images from Edit Wallet so spent outputs drop off.
+Balances refresh from your node. Monero wallets also refresh in the background, and spends drop off on their own.
 
 ---
 
@@ -123,7 +132,7 @@ USD display prices may be fetched from public price APIs. Wallet keys and balanc
 
 ## Architecture
 
-Bitcoin wallets are derived locally and queried through your Electrum server (Electrs, Fulcrum, or ElectrumX). Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
+Bitcoin wallets are derived locally and queried through your Electrum server (Electrs, Fulcrum, or ElectrumX). Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node; sovBalance then reads the rings of the wallet's incoming transactions from the same Monero Node to detect spends. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
 
 XPUB / YPUB / ZPUB
 ↓ (local derivation)
@@ -138,6 +147,8 @@ Primary address + view key
 wallet-rpc
 ↓
 Monero Node
+↑ (get_transactions: input rings of incoming txs)
+sovBalance spend detection
 
 Transparent t1 / t3 address
 ↓ (gRPC)
@@ -158,12 +169,13 @@ Zcash Node
 ## Umbrel
 
 - Electrs, Fulcrum, or ElectrumX via `$APP_ELECTRS_NODE_IP` and `$APP_ELECTRS_NODE_PORT` when one of them is installed (Fulcrum and ElectrumX implement `electrs` on Umbrel and export the same variables; the first found in that order wins)
-- Monero Node via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed
+- Monero Node via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed. The wallet-rpc sidecar syncs from it, and the app itself queries it (`MONERO_DAEMON_*`, HTTP digest auth) for spend detection
 - Zcash Node via `$APP_ZCASH_NODE_IP` and `$APP_ZCASH_WALLET_PORT` when that app is installed
 - Local `simple-monero-wallet-rpc` sidecar for view-only scanning
 - No custom Docker networks. Umbrel handles service networking
 - App state in `${APP_DATA_DIR}/data`
 - Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
+- Monero spend-detection caches in `${APP_DATA_DIR}/data/monero`
 - Shielded Zcash scan databases in `${APP_DATA_DIR}/data/zcash`
 - No required Umbrel dependencies. `exports.sh` sources the Electrum server, Monero Node, and Zcash Node exports when those apps are installed, and `GET /nodes` reports which ones were found
 
@@ -177,7 +189,9 @@ cargo build --release --manifest-path zecscan/Cargo.toml
 node server.js
 ```
 
-Bitcoin wallets need `ELECTRUM_HOST` (and optional `ELECTRUM_PORT`, default 50001) pointing at an Electrum server. Monero wallets need `WALLET_RPC_HOST` pointing at a `monero-wallet-rpc`. `zcash.js` looks for `zec-scan` at `$ZEC_SCAN`, `/usr/local/bin/zec-scan`, or `zecscan/target/release/zec-scan`. Shielded wallets need `ZCASH_LWD_HOST` (and optional `ZCASH_LWD_PORT`, default 9067) pointing at lightwalletd. Currencies whose variables are unset are hidden in the UI.
+Bitcoin wallets need `ELECTRUM_HOST` (and optional `ELECTRUM_PORT`, default 50001) pointing at an Electrum server. `zcash.js` looks for `zec-scan` at `$ZEC_SCAN`, `/usr/local/bin/zec-scan`, or `zecscan/target/release/zec-scan`. Shielded wallets need `ZCASH_LWD_HOST` (and optional `ZCASH_LWD_PORT`, default 9067) pointing at lightwalletd. Currencies whose variables are unset are hidden in the UI.
+
+Monero wallets need `WALLET_RPC_HOST` / `WALLET_RPC_PORT` for a `monero-wallet-rpc`, plus `MONERO_DAEMON_HOST` / `MONERO_DAEMON_PORT` / `MONERO_DAEMON_USER` / `MONERO_DAEMON_PASS` for the monerod it syncs from so spends can be detected. Leave the daemon variables unset for the plain view-only balance; setting `MONERO_DAEMON_HOST` to an empty string (as the Umbrel compose does when Monero Node is not installed) hides Monero entirely. `node monero.js --self-test` exercises the key image parser and the spend classifier.
 
 ## Developers
 
