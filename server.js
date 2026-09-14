@@ -502,7 +502,7 @@ async function scanWallet(w) {
   }
 
   if (!electrumConfigured()) {
-    w.error = "Electrs is not installed. Install the Electrs app on Umbrel."
+    w.error = "No Electrum server is installed. Install Electrs, Fulcrum, or ElectrumX on Umbrel."
     return
   }
 
@@ -1051,7 +1051,7 @@ async function start() {
   if (electrumConfigured()) {
     await connectElectrum()
   } else {
-    console.log("Electrs not configured")
+    console.log("Electrum server not configured")
   }
 
   if (monero.isConfigured()) {

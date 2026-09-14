@@ -9,7 +9,7 @@
 
 Track Bitcoin, Monero, and Zcash wallets on your Umbrel. Add as many as you want. The page shows each asset and a combined USD total.
 
-Balances come from Electrs, Monero Node, and Zcash Node, whichever of those apps are installed. sovBalance detects them on startup and only shows the matching currencies. Nobody else's balance API is in the path.
+Balances come from your Electrum server (Electrs, Fulcrum, or ElectrumX), Monero Node, and Zcash Node, whichever of those apps are installed. sovBalance detects them on startup and only shows the matching currencies. Nobody else's balance API is in the path.
 
 Bitcoin: XPUB / YPUB / ZPUB
 Monero: primary address + private view key
@@ -17,7 +17,7 @@ Zcash: transparent t1 / t3 address or unified viewing key (`uview1…`)
 ↓
 sovBalance
 ↓
-Electrs / local wallet-rpc / lightwalletd
+Electrs, Fulcrum, or ElectrumX / local wallet-rpc / lightwalletd
 ↓
 Bitcoin Core / Monero Node / Zcash Node
 
@@ -41,7 +41,7 @@ sovBalance only talks to the node you run.
 | YPUB | BIP49 | Nested SegWit |
 | ZPUB | BIP84 | Native SegWit |
 
-Addresses are derived locally and scanned against Electrs with a gap limit of 20.
+Addresses are derived locally and scanned against your Electrum server (Electrs, Fulcrum, or ElectrumX) with a gap limit of 20.
 
 ### Monero
 
@@ -94,7 +94,7 @@ Incoming funds do not need this. Outputs covered by imported key images are sett
 
 - Umbrel
 - At least one of:
-  [Electrs](https://apps.umbrel.com/app/electrs) for Bitcoin wallets,
+  [Electrs](https://apps.umbrel.com/app/electrs), [Fulcrum](https://apps.umbrel.com/app/fulcrum), or [ElectrumX](https://apps.umbrel.com/app/electrumx) for Bitcoin wallets,
   [Monero Node](https://apps.umbrel.com/app/monero) for Monero wallets,
   [Zcash Node](https://github.com/nickpio/umbrel-zcash) for Zcash wallets
 
@@ -102,7 +102,7 @@ Incoming funds do not need this. Outputs covered by imported key images are sett
 
 ## Installation
 
-Install sovBalance from the Umbrel App Store. It detects Electrs, Monero Node, and Zcash Node on startup and shows the currencies they serve. Install or remove a node app and restart sovBalance to update the list.
+Install sovBalance from the Umbrel App Store. It detects your Electrum server (Electrs, Fulcrum, or ElectrumX), Monero Node, and Zcash Node on startup and shows the currencies they serve. Install or remove a node app and restart sovBalance to update the list.
 
 ---
 
@@ -132,13 +132,13 @@ USD display prices may be fetched from public price APIs. Wallet keys and balanc
 
 ## Architecture
 
-Bitcoin wallets are derived locally and queried through Electrs. Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node; sovBalance then reads the rings of the wallet's incoming transactions from the same Monero Node to detect spends. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
+Bitcoin wallets are derived locally and queried through your Electrum server (Electrs, Fulcrum, or ElectrumX). Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node; sovBalance then reads the rings of the wallet's incoming transactions from the same Monero Node to detect spends. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
 
 XPUB / YPUB / ZPUB
 ↓ (local derivation)
 sovBalance
 ↓ (TCP)
-Electrs
+Electrs / Fulcrum / ElectrumX
 ↓
 Bitcoin Core
 
@@ -168,7 +168,7 @@ Zcash Node
 
 ## Umbrel
 
-- Electrs via `$APP_ELECTRS_NODE_IP` and `$APP_ELECTRS_NODE_PORT` when that app is installed
+- Electrs, Fulcrum, or ElectrumX via `$APP_ELECTRS_NODE_IP` and `$APP_ELECTRS_NODE_PORT` when one of them is installed (Fulcrum and ElectrumX implement `electrs` on Umbrel and export the same variables; the first found in that order wins)
 - Monero Node via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed. The wallet-rpc sidecar syncs from it, and the app itself queries it (`MONERO_DAEMON_*`, HTTP digest auth) for spend detection
 - Zcash Node via `$APP_ZCASH_NODE_IP` and `$APP_ZCASH_WALLET_PORT` when that app is installed
 - Local `simple-monero-wallet-rpc` sidecar for view-only scanning
@@ -177,7 +177,7 @@ Zcash Node
 - Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
 - Monero spend-detection caches in `${APP_DATA_DIR}/data/monero`
 - Shielded Zcash scan databases in `${APP_DATA_DIR}/data/zcash`
-- No required Umbrel dependencies. `exports.sh` sources the Electrs, Monero Node, and Zcash Node exports when those apps are installed, and `GET /nodes` reports which ones were found
+- No required Umbrel dependencies. `exports.sh` sources the Electrum server, Monero Node, and Zcash Node exports when those apps are installed, and `GET /nodes` reports which ones were found
 
 ---
 

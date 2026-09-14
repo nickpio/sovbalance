@@ -16,8 +16,9 @@ description: >-
 
 
   Automatically detects which node apps you have installed (Electrs,
-  Monero Node, Zcash Node) and shows the matching currencies. Install
-  any one of them to get started. No third-party balance APIs.
+  Fulcrum, or ElectrumX for Bitcoin, Monero Node, Zcash Node) and shows
+  the matching currencies. Install any one of them to get started. No
+  third-party balance APIs.
 
 
   Stop checking balances on block explorers. Your wallets. Your node. Your privacy.
