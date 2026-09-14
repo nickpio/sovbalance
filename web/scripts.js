@@ -20,7 +20,11 @@ var zecUnit = ["zec", "zats"].includes(localStorage.getItem("sovbalance-zec-unit
     : "zec"
 const ASSETS = ["btc", "xmr", "zec"]
 const ASSET_NAMES = { btc: "Bitcoin", xmr: "Monero", zec: "Zcash" }
-const NODE_NAMES = { btc: "Electrs", xmr: "Monero Node", zec: "Zcash Node" }
+const NODE_NAMES = {
+    btc: "an Electrum server app (Electrs, Fulcrum, or ElectrumX)",
+    xmr: "the Monero Node app",
+    zec: "the Zcash Node app"
+}
 var enabledAssets = loadAssetFlags("sovbalance-assets", false)
 // null until /nodes answers; every asset counts as available until then
 var availableAssets = null
@@ -375,7 +379,7 @@ function syncSettingsTabs() {
         if (btn.dataset.setting === "asset") {
             const missing = !assetAvailable(btn.dataset.value)
             btn.disabled = missing
-            btn.title = missing ? `Install the ${NODE_NAMES[btn.dataset.value]} app to track ${ASSET_NAMES[btn.dataset.value]}` : ""
+            btn.title = missing ? `Install ${NODE_NAMES[btn.dataset.value]} to track ${ASSET_NAMES[btn.dataset.value]}` : ""
         }
     })
     document.querySelectorAll("[data-asset-row]").forEach(row => {
@@ -548,7 +552,7 @@ function renderWallets(wallets) {
 
     if (visible.length === 0) {
         const empty = !availableAssetList().length
-            ? "ℹ️ No node apps detected. Install Electrs, Monero Node, or Zcash Node to track wallets"
+            ? "ℹ️ No node apps detected. Install an Electrum server (Electrs, Fulcrum, ElectrumX), Monero Node, or Zcash Node to track wallets"
             : wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"
         document.querySelector("#t tbody").innerHTML = `
         <tr>

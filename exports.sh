@@ -1,24 +1,27 @@
-# Electrs is optional. Umbrel only sources exports of declared dependencies,
-# so pull Electrs' connection details when it is installed.
-electrs_dir="${UMBREL_ROOT}/app-data/electrs"
-electrs_exports="${electrs_dir}/exports.sh"
+# An Electrum server is optional. Umbrel only sources exports of declared
+# dependencies, so pull the connection details of whichever one is installed.
+# Fulcrum and ElectrumX implement electrs and export APP_ELECTRS_NODE_IP/PORT.
+for electrum_id in electrs fulcrum electrumx; do
+  electrum_dir="${UMBREL_ROOT}/app-data/${electrum_id}"
+  electrum_exports="${electrum_dir}/exports.sh"
+  if [[ -f "${electrum_exports}" ]]; then
+    saved_exports_app_id="${EXPORTS_APP_ID-}"
+    saved_exports_app_dir="${EXPORTS_APP_DIR-}"
+    saved_exports_app_data_dir="${EXPORTS_APP_DATA_DIR-}"
 
-if [[ -f "${electrs_exports}" ]]; then
-  saved_exports_app_id="${EXPORTS_APP_ID-}"
-  saved_exports_app_dir="${EXPORTS_APP_DIR-}"
-  saved_exports_app_data_dir="${EXPORTS_APP_DATA_DIR-}"
+    EXPORTS_APP_ID="${electrum_id}"
+    EXPORTS_APP_DIR="${electrum_dir}"
+    EXPORTS_APP_DATA_DIR="${electrum_dir}/data"
 
-  EXPORTS_APP_ID="electrs"
-  EXPORTS_APP_DIR="${electrs_dir}"
-  EXPORTS_APP_DATA_DIR="${electrs_dir}/data"
+    # shellcheck disable=SC1090
+    . "${electrum_exports}"
 
-  # shellcheck disable=SC1090
-  . "${electrs_exports}"
-
-  EXPORTS_APP_ID="${saved_exports_app_id}"
-  EXPORTS_APP_DIR="${saved_exports_app_dir}"
-  EXPORTS_APP_DATA_DIR="${saved_exports_app_data_dir}"
-fi
+    EXPORTS_APP_ID="${saved_exports_app_id}"
+    EXPORTS_APP_DIR="${saved_exports_app_dir}"
+    EXPORTS_APP_DATA_DIR="${saved_exports_app_data_dir}"
+    break
+  fi
+done
 
 # Monero Node is optional. Pull Monero's connection details when it is installed.
 monero_dir="${UMBREL_ROOT}/app-data/monero"
