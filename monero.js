@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const fs = require("fs")
+const http = require("http")
 const path = require("path")
 const { spawnSync } = require("child_process")
 
@@ -189,84 +190,150 @@ function digestAuthorization(challenge, method, uri, creds) {
 }
 
 
-function daemonFetch(url, body, authorization, signal) {
+// monerod keeps its digest session (nonce and request counter) per TCP
+// connection, so the challenge and the answer must travel over the same socket.
+// fetch() may open a new connection for the retry, which the daemon then
+// rejects as stale forever. One keep-alive socket, used by one request at a
+// time, keeps the handshake on a single session.
+const daemonAgent = new http.Agent({ keepAlive: true, maxSockets: 1 })
 
-  const headers = { "Content-Type": "application/json" }
+let daemonQueue = Promise.resolve()
+
+
+function withDaemonLock(fn) {
+  const run = daemonQueue.then(fn, fn)
+  daemonQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
+
+function daemonRequest(url, body, authorization, signal) {
+
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body)
+  }
 
   if (authorization) {
     headers.Authorization = authorization
   }
 
-  return fetch(url, { method: "POST", headers, body, signal })
+  return new Promise((resolve, reject) => {
+
+    const req = http.request(url, { method: "POST", agent: daemonAgent, headers, signal }, res => {
+
+      const chunks = []
+
+      res.on("data", chunk => chunks.push(chunk))
+      res.on("error", reject)
+      res.on("end", () => resolve({
+        status: res.statusCode,
+        wwwAuthenticate: res.headers["www-authenticate"],
+        text: Buffer.concat(chunks).toString("utf8")
+      }))
+
+    })
+
+    req.on("error", e => {
+      e.reusedSocket = req.reusedSocket
+      reject(e)
+    })
+
+    req.end(body)
+
+  })
 
 }
 
 
-async function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
-
-  if (!daemonConfigured()) {
-    throw new Error("Monero Node RPC is not configured")
-  }
-
-  const url = daemonUrl(endpoint)
-  const body = JSON.stringify(params)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+// The daemon may close the idle keep-alive socket just as a request goes out.
+async function daemonSend(url, body, authorization, signal) {
 
   try {
-
-    let res = await daemonFetch(url, body, null, controller.signal)
-
-    // monerod keeps one nonce and resets it whenever an unauthenticated request
-    // arrives (wallet-rpc shares the same daemon), so answer each challenge
-    // fresh instead of reusing a nonce with an incrementing counter.
-    for (let attempt = 0; res.status === 401 && attempt < 3; attempt++) {
-
-      const challenge = parseDigestChallenge(res.headers.get("www-authenticate"))
-      await res.text().catch(() => "")
-
-      if (!challenge) {
-        break
-      }
-
-      if (!DAEMON_USER) {
-        throw new Error("Monero Node RPC requires a login (MONERO_DAEMON_USER / MONERO_DAEMON_PASS)")
-      }
-
-      const authorization = digestAuthorization(challenge, "POST", `/${endpoint}`, {
-        user: DAEMON_USER,
-        pass: DAEMON_PASS
-      })
-
-      res = await daemonFetch(url, body, authorization, controller.signal)
-
-    }
-
-    if (res.status === 401) {
-      throw new Error("Monero Node RPC login was rejected")
-    }
-
-    if (!res.ok) {
-      throw new Error(`Monero Node RPC failed (HTTP ${res.status})`)
-    }
-
-    return await res.json()
-
+    return await daemonRequest(url, body, authorization, signal)
   } catch (e) {
 
-    if (e.name === "AbortError") {
-      throw new Error("Monero Node RPC timeout")
-    }
-
-    if (e.message === "fetch failed" || e.code === "ECONNREFUSED") {
-      throw new Error("Monero Node RPC is not reachable")
+    if (e.reusedSocket && (e.code === "ECONNRESET" || e.code === "EPIPE")) {
+      return daemonRequest(url, body, authorization, signal)
     }
 
     throw e
 
-  } finally {
-    clearTimeout(timer)
   }
+
+}
+
+
+function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
+
+  if (!daemonConfigured()) {
+    return Promise.reject(new Error("Monero Node RPC is not configured"))
+  }
+
+  return withDaemonLock(async () => {
+
+    const url = daemonUrl(endpoint)
+    const body = JSON.stringify(params)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+
+      let res = await daemonSend(url, body, null, controller.signal)
+
+      for (let attempt = 0; res.status === 401 && attempt < 3; attempt++) {
+
+        const challenge = parseDigestChallenge(res.wwwAuthenticate)
+
+        if (!challenge) {
+          break
+        }
+
+        if (!DAEMON_USER) {
+          throw new Error("Monero Node RPC requires a login (MONERO_DAEMON_USER / MONERO_DAEMON_PASS)")
+        }
+
+        const authorization = digestAuthorization(challenge, "POST", `/${endpoint}`, {
+          user: DAEMON_USER,
+          pass: DAEMON_PASS
+        })
+
+        res = await daemonSend(url, body, authorization, controller.signal)
+
+        // stale=false after a credentialed attempt means the login itself failed
+        if (res.status === 401 && !/stale=true/i.test(res.wwwAuthenticate || "")) {
+          break
+        }
+
+      }
+
+      if (res.status === 401) {
+        throw new Error("Monero Node RPC login was rejected")
+      }
+
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(`Monero Node RPC failed (HTTP ${res.status})`)
+      }
+
+      return JSON.parse(res.text)
+
+    } catch (e) {
+
+      if (e.name === "AbortError") {
+        throw new Error("Monero Node RPC timeout")
+      }
+
+      if (["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "EPIPE"].includes(e.code)) {
+        throw new Error("Monero Node RPC is not reachable")
+      }
+
+      throw e
+
+    } finally {
+      clearTimeout(timer)
+    }
+
+  })
 
 }
 
