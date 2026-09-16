@@ -118,6 +118,8 @@ Install sovBalance from the Umbrel App Store. It detects your Electrum server (E
 
 Balances refresh from your node. Monero wallets also refresh in the background, and spends drop off on their own.
 
+Sort the table by name, share of the total (%), or currency with the buttons above it. Click the active button again to flip the direction. The choice is remembered in the browser.
+
 ---
 
 ## Privacy
