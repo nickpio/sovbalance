@@ -204,7 +204,7 @@ function walletFiat(w) {
 }
 
 function formatFiat(amount, digits = 2) {
-    return "$" + amount.toLocaleString(undefined, { maximumFractionDigits: digits })
+    return "$" + amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
 function formatAssetAmount(asset, amount) {
@@ -335,9 +335,9 @@ function paintPrices() {
     totalFiat = fiat
 
     document.getElementById("totalTop").innerText = formatFiat(fiat) + " " + fiatCurrency
-    setLine("totalBTC", assetEnabled("btc"), formatBtcAmount(btc))
-    setLine("totalXMR", assetEnabled("xmr"), formatXmrAmount(xmr))
-    setLine("totalZEC", assetEnabled("zec"), formatZecAmount(zec))
+    setLine("totalBTC", assetEnabled("btc"), formatBtcAmount(btc), fiatLabel(btc, btcPrice))
+    setLine("totalXMR", assetEnabled("xmr"), formatXmrAmount(xmr), fiatLabel(xmr, xmrPrice))
+    setLine("totalZEC", assetEnabled("zec"), formatZecAmount(zec), fiatLabel(zec, zecPrice))
 
     setPriceLine("btcPrice", assetEnabled("btc") && !!btcPrice,
         formatFiat(btcPrice) + " " + fiatCurrency)
@@ -354,10 +354,16 @@ function paintPrices() {
 
 }
 
-function setLine(id, show, text) {
+// Empty until the price is known
+function fiatLabel(amount, price) {
+    return price ? "≈ " + formatFiat(amount * price) + " " + fiatCurrency : ""
+}
+
+function setLine(id, show, text, fiat = "") {
     const el = document.getElementById(id)
     if (!el) return
-    el.innerText = show ? text : ""
+    el.querySelector(".sub-amount").textContent = show ? text : ""
+    el.querySelector(".sub-fiat").textContent = show ? fiat : ""
     el.hidden = !show
 }
 

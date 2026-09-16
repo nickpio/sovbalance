@@ -187,10 +187,24 @@ td {
 
 
 .sub-value {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0 10px;
     font-size: 18px;
     opacity: .88;
     line-height: 1.35;
     font-family: ui-monospace, monospace;
+}
+
+.sub-fiat {
+    font-size: 13px;
+    color: var(--muted);
+    opacity: .7;
+}
+
+.sub-fiat:empty {
+    display: none;
 }
 
 .coin-totals {
