@@ -204,7 +204,7 @@ function walletFiat(w) {
 }
 
 function formatFiat(amount, digits = 2) {
-    return "$" + amount.toLocaleString(undefined, { maximumFractionDigits: digits })
+    return "$" + amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
 function formatAssetAmount(asset, amount) {
