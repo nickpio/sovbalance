@@ -3,7 +3,7 @@ id: bitbalance
 name: bitBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
-version: "1.6.1"
+version: "1.7.0"
 port: 3710
 description: >-
   Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
@@ -36,7 +36,7 @@ path: ""
 dependencies: []
 gallery: []
 releaseNotes: >-
-  Monero spend detection works again with the Monero Node app. 1.6.0
-  reported "Monero Node RPC login was rejected" because it answered the
-  daemon's login challenge on a new connection, which monerod does not
-  accept. The app now keeps the login handshake on one connection.
+  Sort your wallets. The new Sort by buttons above the table order
+  wallets by name, by share of the total, or by currency. Click the
+  active button again to flip the direction. sovBalance remembers your
+  choice.
