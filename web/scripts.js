@@ -57,6 +57,48 @@ function saveAssetFlags(key, flags) {
     localStorage.setItem(key, JSON.stringify(ASSETS.filter(asset => flags[asset])))
 }
 
+// Table order: { key: "name" | "percent" | "currency", dir: 1 | -1 }
+const SORT_KEYS = ["name", "percent", "currency"]
+var walletSort = loadSort()
+
+function loadSort() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem("sovbalance-sort"))
+        if (parsed && SORT_KEYS.includes(parsed.key) && [1, -1].includes(parsed.dir)) return parsed
+    } catch (e) {
+        // fall through to the default order
+    }
+    return { key: "name", dir: 1 }
+}
+
+// Clicking the active key flips its direction; a new key starts with the
+// natural one (largest share first, otherwise ascending).
+function toggleSort(key) {
+    const dir = walletSort.key === key ? -walletSort.dir : (key === "percent" ? -1 : 1)
+    walletSort = { key, dir }
+    localStorage.setItem("sovbalance-sort", JSON.stringify(walletSort))
+    syncSortButtons()
+    renderRows()
+}
+
+function syncSortButtons() {
+    document.querySelectorAll(".sort-btn").forEach(btn => {
+        const active = walletSort.key === btn.dataset.sort
+        btn.classList.toggle("active", active)
+        btn.querySelector(".sort-arrow").textContent = active ? (walletSort.dir === 1 ? "▲" : "▼") : ""
+    })
+}
+
+function sortWallets(wallets, shareOf) {
+    const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true })
+    const compare = walletSort.key === "name"
+        ? (a, b) => collator.compare(a.wallet, b.wallet)
+        : walletSort.key === "currency"
+            ? (a, b) => ASSETS.indexOf(walletAsset(a)) - ASSETS.indexOf(walletAsset(b))
+            : (a, b) => shareOf(a) - shareOf(b)
+    return wallets.slice().sort((a, b) => walletSort.dir * compare(a, b))
+}
+
 let scanCounter = 0
 let scanInterval
 let scanning = false
@@ -554,7 +596,15 @@ function renderWallets(wallets) {
     walletsCache = wallets
     stopScanIndicator()
     paintPrices()
+    renderRows()
+    renderChart()
 
+}
+
+
+function renderRows() {
+
+    const wallets = walletsCache
     const visible = visibleWallets(wallets)
 
     if (visible.length === 0) {
@@ -565,28 +615,25 @@ function renderWallets(wallets) {
         <tr>
           <td colspan="4">${empty}</td>
         </tr>`
-        renderChart()
         return
     }
 
     const mixed = new Set(visible.map(walletAsset)).size > 1
     const useFiat = mixed && totalFiat > 0
 
+    const shareOf = w => {
+        const asset = walletAsset(w)
+        if (useFiat) return totalFiat > 0 ? (walletFiat(w) / totalFiat) * 100 : 0
+        const total = asset === "xmr" ? totalXMR : asset === "zec" ? totalZEC : totalBTC
+        return total > 0 ? (w.balance / total) * 100 : 0
+    }
+
     let rows = ""
 
-    for (const w of visible) {
+    for (const w of sortWallets(visible, shareOf)) {
 
         const asset = walletAsset(w)
-        const fiat = walletFiat(w)
-        const share = useFiat
-            ? (totalFiat > 0 ? (fiat / totalFiat) * 100 : 0)
-            : asset === "xmr"
-                ? (totalXMR > 0 ? (w.balance / totalXMR) * 100 : 0)
-                : asset === "zec"
-                    ? (totalZEC > 0 ? (w.balance / totalZEC) * 100 : 0)
-                    : (totalBTC > 0 ? (w.balance / totalBTC) * 100 : 0)
-
-        const perc = share.toFixed(1)
+        const perc = shareOf(w).toFixed(1)
 
         const status = w.error
             ? `<div class="wallet-error">${w.error}</div>`
@@ -610,8 +657,6 @@ function renderWallets(wallets) {
     }
 
     document.querySelector("#t tbody").innerHTML = rows
-
-    renderChart()
 
 }
 
@@ -1550,6 +1595,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     document.getElementById("app_version").innerText = appVersion
 
     document.getElementById("donateBtn").addEventListener("click", donateModal)
+    syncSortButtons()
 
     canWrite = await probeWriteAccess()
     await loadNodes()

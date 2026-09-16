@@ -71,6 +71,45 @@ header h1 {
 }
 
 
+.sort-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.sort-label {
+    font-size: 13px;
+    color: var(--muted);
+    margin-right: 2px;
+}
+
+.sort-btn {
+    background: var(--hover);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.sort-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000000;
+}
+
+.sort-arrow {
+    font-size: 10px;
+}
+
+.sort-arrow:empty {
+    display: none;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
