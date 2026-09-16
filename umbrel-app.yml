@@ -39,4 +39,5 @@ releaseNotes: >-
   Sort your wallets. The new Sort by buttons above the table order
   wallets by name, by share of the total, or by currency. Click the
   active button again to flip the direction. sovBalance remembers your
-  choice.
+  choice. The Bitcoin, Monero, and Zcash totals under the total balance
+  now also show their value in your fiat currency.
