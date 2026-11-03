@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: daily-release
@@ -21,9 +22,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create patch release when there are new commits
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Determine next image version
+        id: version
         shell: bash
         run: |
           set -euo pipefail
@@ -54,7 +54,32 @@ jobs:
             exit 1
           fi
 
-          gh release create "$next_tag" \
-            --target "$GITHUB_SHA" \
-            --title "$next_tag" \
-            --generate-notes
+          echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
+          echo "image_version=${next_tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create version tag
+        if: steps.version.outputs.tag != ''
+        run: git tag "${{ steps.version.outputs.tag }}" "$GITHUB_SHA" && git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Log in to GitHub Container Registry
+        if: steps.version.outputs.tag != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.version.outputs.tag != ''
+
+      - name: Build and publish Docker release
+        if: steps.version.outputs.tag != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ghcr.io/nickpio/sovbalance/app:${{ steps.version.outputs.image_version }}
+            ghcr.io/nickpio/sovbalance/app:latest
