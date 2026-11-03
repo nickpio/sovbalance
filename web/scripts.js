@@ -276,17 +276,17 @@ function readFiatMap(value) {
     return { USD: n, CAD: 0 }
 }
 
-async function loadPrices() {
+async function loadPrices(force = false) {
 
     const now = Date.now()
 
-    if ((fiatOf(btcPrices) || fiatOf(xmrPrices) || fiatOf(zecPrices)) && now - lastPriceFetch < 300000) {
+    if (!force && (fiatOf(btcPrices) || fiatOf(xmrPrices) || fiatOf(zecPrices)) && now - lastPriceFetch < 300000) {
         return
     }
 
     try {
 
-        const data = await fetchJson("/prices", 15000)
+        const data = await fetchJson(force ? "/prices?refresh=true" : "/prices", 15000)
 
         btcPrices = readFiatMap(data.btc)
         xmrPrices = readFiatMap(data.xmr)
@@ -505,9 +505,9 @@ function openSettings() {
     })
 }
 
-async function updatePrices() {
+async function updatePrices(force = false) {
 
-    await loadPrices()
+    await loadPrices(force)
     paintPrices()
 
     if (walletsCache.length) {
@@ -669,6 +669,8 @@ function renderRows() {
 
 async function load(rescan = true) {
 
+    if (rescan && scanning) return
+
     if (!walletsCache.length) {
         clearTable()
         startScanIndicator()
@@ -691,8 +693,6 @@ async function load(rescan = true) {
         </tr>`
         return
     }
-
-    updatePrices()
 
     if (!rescan) return
 
@@ -730,7 +730,7 @@ async function load(rescan = true) {
 
 
 // The server refreshes Monero wallets on its own; pick those balances up
-// without a manual Refresh. Only re-render when something changed so the
+// without a manual Sync. Only re-render when something changed so the
 // chart does not re-animate every poll.
 async function pollWallets() {
 
@@ -1608,6 +1608,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     applyWriteUi()
 
     load(false)
+    updatePrices()
 
     setInterval(updatePrices, 60 * 1000)
     setInterval(pollWallets, 30 * 1000)

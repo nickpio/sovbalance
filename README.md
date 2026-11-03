@@ -1,19 +1,36 @@
-![Bitcoin](https://img.shields.io/badge/Bitcoin-self--hosted-orange)
-![Monero](https://img.shields.io/badge/Monero-view--only-brightgreen)
-![Zcash](https://img.shields.io/badge/Zcash-shielded-yellow)
-![Umbrel](https://img.shields.io/badge/Runs%20on-Umbrel-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+<a id="top"></a>
+
+<div align="center">
+
+<img src="./web/logo.png" alt="sovBalance logo" width="112">
 
 # sovBalance
-<img src="./web/logo.png">
 
-Track Bitcoin, Monero, and Zcash wallets on your Umbrel. Add as many as you want. The page shows each asset and a combined USD total.
+**A self-hosted wallet balance dashboard for Umbrel.**<br>
+Track Bitcoin, Monero, and Zcash using the node services you run. Your wallet keys stay on your server.
 
-Balances come from your Electrum server (Electrs, Fulcrum, or ElectrumX), Monero Node, and Zcash Node, whichever of those apps are installed. sovBalance detects them on startup and only shows the matching currencies. Nobody else's balance API is in the path.
+<br>
 
-Bitcoin: XPUB / YPUB / ZPUB
-Monero: primary address + private view key
+[![Bitcoin](https://img.shields.io/badge/Bitcoin-self--hosted-f7931a?style=for-the-badge&logo=bitcoin&logoColor=white)](#supported-wallets)
+[![Monero](https://img.shields.io/badge/Monero-view--only-f26822?style=for-the-badge)](#supported-wallets)
+[![Zcash](https://img.shields.io/badge/Zcash-shielded-f4b728?style=for-the-badge)](#supported-wallets)
+[![Umbrel](https://img.shields.io/badge/Runs%20on-Umbrel-3b82f6?style=for-the-badge)](#installation)
+[![License](https://img.shields.io/badge/license-MIT-0f766e?style=for-the-badge)](#license)
+
+[**Features**](#features) &nbsp;·&nbsp; [**Install**](#installation) &nbsp;·&nbsp; [**Usage**](#usage) &nbsp;·&nbsp; [**Privacy**](#privacy) &nbsp;·&nbsp; [**Development**](#local-development) &nbsp;·&nbsp; [**License**](#license)
+
+</div>
+
+<br>
+
+## Overview
+
+Add Bitcoin, Monero, and Zcash wallets to one dashboard. sovBalance shows each asset and a combined USD total, and discovers supported node apps at startup. Only currencies backed by installed services appear.
+
+Bitcoin: XPUB / YPUB / ZPUB<br>
+Monero: primary address + private view key<br>
 Zcash: transparent t1 / t3 address or unified viewing key (`uview1…`)
+
 ↓
 sovBalance
 ↓
@@ -21,13 +38,15 @@ Electrs, Fulcrum, or ElectrumX / local wallet-rpc / lightwalletd
 ↓
 Bitcoin Core / Monero Node / Zcash Node
 
----
+## Features
 
-## Why
+- Track Bitcoin, Monero, and Zcash wallets together, with per-asset and combined USD totals.
+- Derive Bitcoin addresses locally and query your Electrum server.
+- Scan Monero view-only wallets and detect most spends from transaction rings.
+- Scan Zcash unified viewing keys locally through your Zcash Node's lightwalletd.
+- Keep wallet data on your Umbrel; no third-party balance APIs or analytics.
 
-A lot of web trackers ask you to paste an XPUB or Monero view key into their site. That hands them every address, the balance, and the history.
-
-sovBalance only talks to the node you run.
+<p align="right"><a href="#top">back to top</a></p>
 
 ---
 
@@ -53,7 +72,7 @@ View-only wallets can see received outputs, including subaddresses. Set a restor
 
 Spends are detected automatically. A view key cannot compute key images, so the wallet itself never sees an outgoing transaction. sovBalance instead looks at every transaction that pays the wallet and asks your Monero Node for its input rings. A spend from the wallet returns change to it, and every one of its input rings must contain one of the wallet's own outputs. When that holds, and the matched outputs can cover the change plus the fee, the transaction is treated as a spend and the matched outputs are removed from the balance. Verdicts for confirmed transactions are cached under `data/monero`, and mempool transactions are checked too, so a spend shows up about as soon as it is broadcast.
 
-Monero wallets are refreshed on a timer (`XMR_REFRESH_SECONDS`, default 120, `0` disables) and the page picks up new balances without a manual Refresh.
+Monero wallets are refreshed on a timer (`XMR_REFRESH_SECONDS`, default 120, `0` disables) and the page picks up new balances without a manual Sync.
 
 Limits of the ring analysis:
 
@@ -116,7 +135,7 @@ Install sovBalance from the Umbrel App Store. It detects your Electrum server (E
    Monero: paste a primary address, private view key, and optional restore height
    Zcash: paste a transparent t1 / t3 address, or a `uview1…` viewing key and optional birthday height
 
-Balances refresh from your node. Monero wallets also refresh in the background, and spends drop off on their own.
+Click Refresh to update prices, or Sync to update linked wallet balances from their respective nodes. Monero wallets also refresh in the background, and spends drop off on their own.
 
 Sort the table by name, share of the total (%), or currency with the buttons above it. Click the active button again to flip the direction. The choice is remembered in the browser.
 

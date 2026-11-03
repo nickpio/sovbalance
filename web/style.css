@@ -732,6 +732,25 @@ footer {
 
 }
 
+@media (max-width: 600px) {
+    body {
+        padding-top: 0;
+    }
+
+    header {
+        position: static;
+        height: auto;
+        min-height: 70px;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px;
+    }
+
+    .header-buttons {
+        flex-wrap: wrap;
+    }
+}
+
 .swal2-popup {
     background: var(--card) !important;
     color: var(--text) !important;

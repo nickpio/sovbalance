@@ -646,7 +646,7 @@ async function fetchZecPrices() {
 app.get("/prices", async (req, res) => {
   const now = Date.now()
 
-  if (now - priceCache.at < 60000 && (anyFiat(priceCache.btc) || anyFiat(priceCache.xmr) || anyFiat(priceCache.zec))) {
+  if (req.query.refresh !== "true" && now - priceCache.at < 60000 && (anyFiat(priceCache.btc) || anyFiat(priceCache.xmr) || anyFiat(priceCache.zec))) {
     return res.json({ btc: priceCache.btc, xmr: priceCache.xmr, zec: priceCache.zec })
   }
 
