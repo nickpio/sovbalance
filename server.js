@@ -220,8 +220,6 @@ async function getAddressBalance(address) {
 
   const utxos = await electrum.blockchainScripthash_listunspent(sh)
 
-  //console.log("UTXOs for address:", address, utxos)
-
   if (!utxos || utxos.length === 0)
     return 0
 
@@ -245,18 +243,14 @@ function validateKey(key) {
 
 
 
-async function scanBranch(root, change, type, isBranch = false) {
+async function scanBranch(root, change, type) {
 
 
   if (type === "auto") {
     throw new Error("scanBranch must receive a single type")
   }
 
-  const branch = isBranch ? root : root.derive(change)
-
-  //const types = type === "auto" ? ["p2pkh", "p2wpkh", "p2sh"] : [type];
-
-  //const types = [type];
+  const branch = root.derive(change)
 
   let index = 0
   let gap = 0
@@ -307,7 +301,6 @@ async function scanBranch(root, change, type, isBranch = false) {
       index++
     }
 
-    //    const balances = await Promise.all(batch.map(a => getAddressBalance(a)))
     const balances = await Promise.all(
       batch.map(a =>
         withTimeout(getAddressBalance(a)).catch(() => 0)
@@ -390,36 +383,6 @@ async function getWalletBalance(xpub) {
   return total
 }
 
-
-async function __getWalletBalance(xpub) {
-
-  const info = normalizeXpub(xpub)
-
-  if (!info || !info.key) {
-    return 0
-  }
-
-  const root = bip32.fromBase58(info.key, bitcoin.networks.bitcoin)
-
-  let total = 0
-
-  try {
-
-    // padrão normal
-    total += await scanBranch(root, 0, info.type)
-    total += await scanBranch(root, 1, info.type)
-
-  } catch { }
-
-  try {
-
-    // fallback para xpub já no branch
-    total += await scanBranch(root, null, info.type, true)
-
-  } catch { }
-
-  return total
-}
 
 
 
@@ -775,7 +738,6 @@ app.post("/wallet", (req, res) => {
     return res.status(400).json({ error: "wallet required" })
 
   const id = wallets.length > 0 ? Math.max(...wallets.map(w => w.id)) + 1 : 0;
-  const order = wallets.length;
 
   if (type === "xmr") {
 
@@ -793,7 +755,6 @@ app.post("/wallet", (req, res) => {
 
     wallets.push({
       id,
-      order,
       wallet,
       type: "xmr",
       address: info.address,
@@ -819,7 +780,6 @@ app.post("/wallet", (req, res) => {
 
       wallets.push({
         id,
-        order,
         wallet,
         type: "zec",
         ufvk: info.ufvk,
@@ -833,7 +793,6 @@ app.post("/wallet", (req, res) => {
 
       wallets.push({
         id,
-        order,
         wallet,
         type: "zec",
         address: info.address,
@@ -858,7 +817,7 @@ app.post("/wallet", (req, res) => {
       return res.status(400).json({ error: "xpub already exists" })
     }
 
-    wallets.push({ id, order, wallet, type: "btc", xpub, balance: 0 })
+    wallets.push({ id, wallet, type: "btc", xpub, balance: 0 })
 
   }
 

@@ -795,41 +795,6 @@ const innerShadow = {
 }
 
 
-const dimOthers = {
-    id: "dimOthers",
-
-    beforeDatasetsDraw(chart) {
-
-        const active = chart.getActiveElements()
-
-        if (!active.length) return
-
-        const { ctx } = chart
-        const meta = chart.getDatasetMeta(0)
-
-        const activeIndex = active[0].index
-
-        ctx.save()
-
-        meta.data.forEach((arc, i) => {
-
-            if (i === activeIndex) return
-
-            const { x, y, innerRadius, outerRadius, startAngle, endAngle } = arc
-
-            ctx.beginPath()
-            ctx.arc(x, y, outerRadius, startAngle, endAngle)
-            ctx.arc(x, y, innerRadius, endAngle, startAngle, true)
-            ctx.closePath()
-
-            ctx.fillStyle = "rgba(0,0,0,0.35)"
-            ctx.fill()
-
-        })
-
-        ctx.restore()
-    }
-}
 
 
 

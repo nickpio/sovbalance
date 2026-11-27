@@ -801,82 +801,11 @@ function toHex(buf) {
 }
 
 
-function rotl32(v, n) {
-  return ((v << n) | (v >>> (32 - n))) >>> 0
-}
-
-
-function chacha20Quarter(s, a, b, c, d) {
-  s[a] = (s[a] + s[b]) >>> 0
-  s[d] = rotl32(s[d] ^ s[a], 16)
-  s[c] = (s[c] + s[d]) >>> 0
-  s[b] = rotl32(s[b] ^ s[c], 12)
-  s[a] = (s[a] + s[b]) >>> 0
-  s[d] = rotl32(s[d] ^ s[a], 8)
-  s[c] = (s[c] + s[d]) >>> 0
-  s[b] = rotl32(s[b] ^ s[c], 7)
-}
-
-
+// Monero uses original ChaCha20: 64-bit block counter, then the 8-byte IV.
 function chacha20Xor(data, key, iv) {
-
-  const out = Buffer.alloc(data.length)
-  const j = new Uint32Array(16)
-  const sigma = Buffer.from("expand 32-byte k")
-
-  j[0] = sigma.readUInt32LE(0)
-  j[1] = sigma.readUInt32LE(4)
-  j[2] = sigma.readUInt32LE(8)
-  j[3] = sigma.readUInt32LE(12)
-
-  for (let i = 0; i < 8; i++) {
-    j[4 + i] = key.readUInt32LE(i * 4)
-  }
-
-  j[14] = iv.readUInt32LE(0)
-  j[15] = iv.readUInt32LE(4)
-
-  let offset = 0
-
-  while (offset < data.length) {
-
-    const x = new Uint32Array(j)
-
-    for (let i = 0; i < 10; i++) {
-      chacha20Quarter(x, 0, 4, 8, 12)
-      chacha20Quarter(x, 1, 5, 9, 13)
-      chacha20Quarter(x, 2, 6, 10, 14)
-      chacha20Quarter(x, 3, 7, 11, 15)
-      chacha20Quarter(x, 0, 5, 10, 15)
-      chacha20Quarter(x, 1, 6, 11, 12)
-      chacha20Quarter(x, 2, 7, 8, 13)
-      chacha20Quarter(x, 3, 4, 9, 14)
-    }
-
-    const block = Buffer.alloc(64)
-
-    for (let i = 0; i < 16; i++) {
-      block.writeUInt32LE((x[i] + j[i]) >>> 0, i * 4)
-    }
-
-    const n = Math.min(64, data.length - offset)
-
-    for (let i = 0; i < n; i++) {
-      out[offset + i] = data[offset + i] ^ block[i]
-    }
-
-    j[12] = (j[12] + 1) >>> 0
-
-    if (j[12] === 0) {
-      j[13] = (j[13] + 1) >>> 0
-    }
-
-    offset += 64
-
-  }
-
-  return out
-
+  return crypto
+    .createCipheriv("chacha20", key, Buffer.concat([Buffer.alloc(8), iv]))
+    .update(data)
 }
 
 
