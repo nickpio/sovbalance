@@ -1,8 +1,6 @@
-name: Daily release
+name: Release
 
 on:
-  schedule:
-    - cron: "17 8 * * *"
   workflow_dispatch:
 
 permissions:
@@ -10,19 +8,23 @@ permissions:
   packages: write
 
 concurrency:
-  group: daily-release
+  group: release
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      image_version: ${{ steps.version.outputs.image_version }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Check out repository history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Determine next image version
+      - name: Determine next version
         id: version
         shell: bash
         run: |
@@ -72,7 +74,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
         if: steps.version.outputs.tag != ''
 
-      - name: Build and publish Docker release
+      - name: Build and publish Docker image
+        id: build
         if: steps.version.outputs.tag != ''
         uses: docker/build-push-action@v6
         with:
@@ -83,3 +86,8 @@ jobs:
           tags: |
             ghcr.io/nickpio/sovbalance/app:${{ steps.version.outputs.image_version }}
             ghcr.io/nickpio/sovbalance/app:latest
+
+      - name: Summary
+        if: steps.version.outputs.tag != ''
+        run: |
+          echo "Published ghcr.io/nickpio/sovbalance/app:${{ steps.version.outputs.image_version }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
