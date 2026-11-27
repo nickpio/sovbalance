@@ -9,7 +9,6 @@ const protoLoader = require("@grpc/proto-loader")
 const HOST = process.env.ZCASH_LWD_HOST || ""
 const PORT = parseInt(process.env.ZCASH_LWD_PORT || "9067", 10)
 const PROTO = path.join(__dirname, "vendor/lightwalletd/service.proto")
-const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 const SAPLING_ACTIVATION = 419200
 const NU5_ACTIVATION = 1687104
 const SCAN_SECONDS = 25 * 60
@@ -408,12 +407,6 @@ function validateZcashWallet(input) {
 
   if (!/^(t1|t3)[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) {
     throw new Error("Enter a mainnet transparent address (t1 or t3) or unified viewing key (uview1)")
-  }
-
-  for (const ch of address) {
-    if (!BASE58.includes(ch)) {
-      throw new Error("Invalid Zcash address")
-    }
   }
 
   return { address }
