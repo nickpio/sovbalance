@@ -1,6 +1,6 @@
 {
   "name": "bitbalance",
-  "version": "1.7.4",
+  "version": "1.7.6",
   "description": "Bitcoin, Monero, and Zcash balance monitor (XPUB / view-only / t-addr / uview)",
   "main": "server.js",
   "type": "commonjs",
