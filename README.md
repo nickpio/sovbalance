@@ -7,11 +7,12 @@
 # sovBalance
 
 **A self-hosted wallet balance dashboard for Umbrel.**<br>
-Track Bitcoin, Monero, and Zcash using the node services you run. Your wallet keys stay on your server.
+Track Bitcoin, Lightning, Monero, and Zcash using the node services you run. Your wallet keys stay on your server.
 
 <br>
 
 [![Bitcoin](https://img.shields.io/badge/Bitcoin-self--hosted-f7931a?style=for-the-badge&logo=bitcoin&logoColor=white)](#supported-wallets)
+[![Lightning](https://img.shields.io/badge/Lightning-LND-a855f7?style=for-the-badge)](#supported-wallets)
 [![Monero](https://img.shields.io/badge/Monero-view--only-f26822?style=for-the-badge)](#supported-wallets)
 [![Zcash](https://img.shields.io/badge/Zcash-shielded-f4b728?style=for-the-badge)](#supported-wallets)
 [![Umbrel](https://img.shields.io/badge/Runs%20on-Umbrel-3b82f6?style=for-the-badge)](#installation)
@@ -25,23 +26,25 @@ Track Bitcoin, Monero, and Zcash using the node services you run. Your wallet ke
 
 ## Overview
 
-Add Bitcoin, Monero, and Zcash wallets to one dashboard. sovBalance shows each asset and a combined USD total, and discovers supported node apps at startup. Only currencies backed by installed services appear.
+Add Bitcoin, Lightning, Monero, and Zcash wallets to one dashboard. sovBalance shows each asset and a combined USD total, and discovers supported node apps at startup. Only currencies backed by installed services appear.
 
 Bitcoin: XPUB / YPUB / ZPUB<br>
+Lightning: your Lightning Node (LND), read with its read-only macaroon<br>
 Monero: primary address + private view key<br>
 Zcash: transparent t1 / t3 address or unified viewing key (`uview1…`)
 
 ↓
 sovBalance
 ↓
-Electrs, Fulcrum, or ElectrumX / local wallet-rpc / lightwalletd
+Electrs, Fulcrum, or ElectrumX / LND / local wallet-rpc / lightwalletd
 ↓
 Bitcoin Core / Monero Node / Zcash Node
 
 ## Features
 
-- Track Bitcoin, Monero, and Zcash wallets together, with per-asset and combined USD totals.
+- Track Bitcoin, Lightning, Monero, and Zcash wallets together, with per-asset and combined USD totals.
 - Derive Bitcoin addresses locally and query your Electrum server.
+- Read your Lightning Node's channel and wallet balance with a read-only macaroon.
 - Scan Monero view-only wallets and detect most spends from transaction rings.
 - Scan Zcash unified viewing keys locally through your Zcash Node's lightwalletd.
 - Keep wallet data on your Umbrel; no third-party balance APIs or analytics.
@@ -61,6 +64,27 @@ Bitcoin Core / Monero Node / Zcash Node
 | ZPUB | BIP84 | Native SegWit |
 
 Addresses are derived locally and scanned against your Electrum server (Electrs, Fulcrum, or ElectrumX) with a gap limit of 20.
+
+### Lightning
+
+| Node | What you enter |
+|-----|------|
+| LND (Umbrel Lightning Node app) | A name. The node is detected automatically. |
+
+A Lightning balance cannot be watched from a public key. It is channel state that only the node holds, so sovBalance asks your node for it over LND's REST API. It reads LND's `readonly.macaroon`, which can query balances but cannot pay invoices, open channels, or move funds, and it trusts only the node's own `tls.cert`.
+
+The Lightning balance counts:
+
+- your side of open channels
+- funds committed to channels that are still opening
+- funds in force-closed channels that are still timelocked
+- optionally, the node's on-chain wallet (confirmed and unconfirmed)
+
+Cooperatively closing channels stay in the channel balance until the close confirms, so they are not counted twice. If you already track the node's on-chain wallet as a Bitcoin wallet, untick **Include the node's on-chain funds** so those coins are not counted twice.
+
+One Lightning wallet stands for the whole node, so only one can be added. Lightning is valued at the Bitcoin price and shows in sats by default. Lightning wallets are refreshed on a timer (`LN_REFRESH_SECONDS`, default 60, `0` disables).
+
+Only LND is supported for now. Core Lightning and other node types may follow.
 
 ### Monero
 
@@ -114,6 +138,7 @@ Incoming funds do not need this. Outputs covered by imported key images are sett
 - Umbrel
 - At least one of:
   [Electrs](https://apps.umbrel.com/app/electrs), [Fulcrum](https://apps.umbrel.com/app/fulcrum), or [ElectrumX](https://apps.umbrel.com/app/electrumx) for Bitcoin wallets,
+  [Lightning Node](https://apps.umbrel.com/app/lightning) for Lightning wallets,
   [Monero Node](https://apps.umbrel.com/app/monero) for Monero wallets,
   [Zcash Node](https://github.com/nickpio/umbrel-zcash) for Zcash wallets
 
@@ -121,7 +146,7 @@ Incoming funds do not need this. Outputs covered by imported key images are sett
 
 ## Installation
 
-Install sovBalance from the Umbrel App Store. It detects your Electrum server (Electrs, Fulcrum, or ElectrumX), Monero Node, and Zcash Node on startup and shows the currencies they serve. Install or remove a node app and restart sovBalance to update the list.
+Install sovBalance from the Umbrel App Store. It detects your Electrum server (Electrs, Fulcrum, or ElectrumX), Lightning Node, Monero Node, and Zcash Node on startup and shows the currencies they serve. Install or remove a node app and restart sovBalance to update the list.
 
 ---
 
@@ -129,13 +154,14 @@ Install sovBalance from the Umbrel App Store. It detects your Electrum server (E
 
 1. Open sovBalance
 2. Click Add Wallet
-3. Choose Bitcoin, Monero, or Zcash
+3. Choose Bitcoin, Lightning, Monero, or Zcash
 4. Enter a wallet name
 5. Bitcoin: paste an XPUB / YPUB / ZPUB
+   Lightning: nothing to paste; choose whether to include the node's on-chain funds
    Monero: paste a primary address, private view key, and optional restore height
    Zcash: paste a transparent t1 / t3 address, or a `uview1…` viewing key and optional birthday height
 
-Click Refresh to update prices, or Sync to update linked wallet balances from their respective nodes. Monero wallets also refresh in the background, and spends drop off on their own.
+Click Refresh to update prices, or Sync to update linked wallet balances from their respective nodes. Lightning and Monero wallets also refresh in the background, and Monero spends drop off on their own.
 
 Sort the table by name, share of the total (%), or currency with the buttons above it. Click the active button again to flip the direction. The choice is remembered in the browser.
 
@@ -145,6 +171,8 @@ Sort the table by name, share of the total (%), or currency with the buttons abo
 
 No third-party balance APIs. No analytics. Bitcoin xpubs, Monero view keys, and Zcash addresses / viewing keys stay on your node.
 
+sovBalance reads LND's `readonly.macaroon` and `tls.cert` from a read-only mount of the Lightning Node app's folder. It never copies them, stores them in `wallets.json`, or sends them anywhere but your own LND. The read-only macaroon cannot spend.
+
 A Zcash unified viewing key reveals the full account history to whoever holds it. It is stored in plaintext `wallets.json`, same as a Monero view key. Spend keys are never required.
 
 USD display prices may be fetched from public price APIs. Wallet keys and balances are not sent with those requests.
@@ -153,13 +181,19 @@ USD display prices may be fetched from public price APIs. Wallet keys and balanc
 
 ## Architecture
 
-Bitcoin wallets are derived locally and queried through your Electrum server (Electrs, Fulcrum, or ElectrumX). Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node; sovBalance then reads the rings of the wallet's incoming transactions from the same Monero Node to detect spends. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
+Bitcoin wallets are derived locally and queried through your Electrum server (Electrs, Fulcrum, or ElectrumX). Lightning balances are read from your LND over its REST API with the read-only macaroon. Monero wallets are opened as view-only wallets in a local `wallet-rpc` sidecar that talks to your Monero Node; sovBalance then reads the rings of the wallet's incoming transactions from the same Monero Node to detect spends. Zcash transparent balances are queried from your Zcash Node's lightwalletd. Shielded Zcash viewing keys are scanned by a local `zec-scan` helper that talks to the same lightwalletd.
 
 XPUB / YPUB / ZPUB
 ↓ (local derivation)
 sovBalance
 ↓ (TCP)
 Electrs / Fulcrum / ElectrumX
+↓
+Bitcoin Core
+
+Lightning Node
+↓ (REST, readonly.macaroon, pinned tls.cert)
+LND
 ↓
 Bitcoin Core
 
@@ -190,6 +224,7 @@ Zcash Node
 ## Umbrel
 
 - Electrs, Fulcrum, or ElectrumX via `$APP_ELECTRS_NODE_IP` and `$APP_ELECTRS_NODE_PORT` when one of them is installed (Fulcrum and ElectrumX implement `electrs` on Umbrel and export the same variables; the first found in that order wins)
+- Lightning Node via `$APP_LIGHTNING_NODE_IP`, `$APP_LIGHTNING_NODE_REST_PORT`, and `$APP_LIGHTNING_NODE_DATA_DIR` when that app is installed. The LND data folder is mounted read-only at `/lnd`; without Lightning Node an empty `${APP_DATA_DIR}/lnd-not-installed` folder is mounted in its place
 - Monero Node via `$APP_MONERO_NODE_IP`, `$APP_MONERO_RPC_PORT`, `$APP_MONERO_RPC_USER`, and `$APP_MONERO_RPC_PASS` when that app is installed. The wallet-rpc sidecar syncs from it, and the app itself queries it (`MONERO_DAEMON_*`, HTTP digest auth) for spend detection
 - Zcash Node via `$APP_ZCASH_NODE_IP` and `$APP_ZCASH_WALLET_PORT` when that app is installed
 - Local `simple-monero-wallet-rpc` sidecar for view-only scanning
@@ -198,7 +233,7 @@ Zcash Node
 - Monero wallet-rpc files in `${APP_DATA_DIR}/monero-wallets`
 - Monero spend-detection caches in `${APP_DATA_DIR}/data/monero`
 - Shielded Zcash scan databases in `${APP_DATA_DIR}/data/zcash`
-- No required Umbrel dependencies. `exports.sh` sources the Electrum server, Monero Node, and Zcash Node exports when those apps are installed, and `GET /nodes` reports which ones were found
+- No required Umbrel dependencies. `exports.sh` sources the Electrum server, Lightning Node, Monero Node, and Zcash Node exports when those apps are installed, and `GET /nodes` reports which ones were found
 
 ---
 
@@ -211,6 +246,8 @@ node server.js
 ```
 
 Bitcoin wallets need `ELECTRUM_HOST` (and optional `ELECTRUM_PORT`, default 50001) pointing at an Electrum server. `zcash.js` looks for `zec-scan` at `$ZEC_SCAN`, `/usr/local/bin/zec-scan`, or `zecscan/target/release/zec-scan`. Shielded wallets need `ZCASH_LWD_HOST` (and optional `ZCASH_LWD_PORT`, default 9067) pointing at lightwalletd. Currencies whose variables are unset are hidden in the UI.
+
+Lightning wallets need `LND_REST_HOST` (and optional `LND_REST_PORT`, default 8080) pointing at LND's REST API, plus `LND_DIR` pointing at an LND data folder (default `data/lnd`) holding `tls.cert` and `data/chain/bitcoin/<LND_NETWORK>/readonly.macaroon`. `LND_NETWORK` defaults to `mainnet`. `LND_TLS_CERT_PATH`, `LND_MACAROON_PATH`, or a hex `LND_MACAROON_HEX` override the file locations. `node lightning.js --self-test` checks the balance math.
 
 Monero wallets need `WALLET_RPC_HOST` / `WALLET_RPC_PORT` for a `monero-wallet-rpc`, plus `MONERO_DAEMON_HOST` / `MONERO_DAEMON_PORT` / `MONERO_DAEMON_USER` / `MONERO_DAEMON_PASS` for the monerod it syncs from so spends can be detected. Leave the daemon variables unset for the plain view-only balance; setting `MONERO_DAEMON_HOST` to an empty string (as the Umbrel compose does when Monero Node is not installed) hides Monero entirely. `node monero.js --self-test` exercises the key image parser and the spend classifier.
 

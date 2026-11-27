@@ -28,6 +28,8 @@ _sovbalance_source_exports() {
 # Fulcrum and ElectrumX implement electrs and export APP_ELECTRS_NODE_IP/PORT.
 _sovbalance_source_exports electrs fulcrum electrumx
 _sovbalance_source_exports monero
+# Lightning Node (LND) exports APP_LIGHTNING_NODE_IP/REST_PORT/DATA_DIR.
+_sovbalance_source_exports lightning
 # Community id is personal-zcash-node; store id may be zec-zcash-node.
 _sovbalance_source_exports personal-zcash-node zec-zcash-node
 unset -f _sovbalance_source_exports

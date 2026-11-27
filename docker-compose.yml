@@ -28,8 +28,17 @@ services:
       MONERO_DAEMON_PASS: ${APP_MONERO_RPC_PASS:-}
       ZCASH_LWD_HOST: ${APP_ZCASH_NODE_IP:-}
       ZCASH_LWD_PORT: ${APP_ZCASH_WALLET_PORT:-9067}
+      # LND of the Lightning Node app. sovBalance reads only tls.cert and
+      # readonly.macaroon from its data dir, mounted read-only below.
+      # An empty LND_REST_HOST tells the app Lightning Node is not installed.
+      LND_REST_HOST: ${APP_LIGHTNING_NODE_IP:-}
+      LND_REST_PORT: ${APP_LIGHTNING_NODE_REST_PORT:-8080}
+      LND_NETWORK: ${APP_BITCOIN_NETWORK:-mainnet}
+      LND_DIR: /lnd
     volumes:
       - ${APP_DATA_DIR}/data:/data
+      # Without Lightning Node, mount an empty placeholder so compose still starts.
+      - ${APP_LIGHTNING_NODE_DATA_DIR:-${APP_DATA_DIR}/lnd-not-installed}:/lnd:ro
 
   wallet_rpc:
     image: ghcr.io/sethforprivacy/simple-monero-wallet-rpc:v0.18.5.1@sha256:8f3fe0fd8f43b845c434c3936ef3808f411d4f0826c0536a68a2d9bf0866c557

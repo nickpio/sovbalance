@@ -11,6 +11,7 @@ const bip32 = BIP32Factory(ecc);
 const { zpubToXpub, ypubToXpub } = require('./derive');
 const monero = require('./monero');
 const zcash = require('./zcash');
+const lightning = require('./lightning');
 
 
 const isDocker = fs.existsSync("/.dockerenv");
@@ -377,6 +378,21 @@ async function scanWallet(w) {
     return
   }
 
+  if (walletType(w) === "ln") {
+
+    try {
+      const result = await lightning.getWalletBalance(w)
+      w.balance = result.balance
+      w.lightning = result.lightning
+      delete w.error
+    } catch (e) {
+      console.error("Error scanning Lightning wallet:", e.message)
+      w.error = e.message
+    }
+
+    return
+  }
+
   if (walletType(w) === "zec") {
 
     try {
@@ -420,7 +436,8 @@ app.get("/nodes", (req, res) => {
   res.json({
     btc: electrumConfigured(),
     xmr: monero.isConfigured(),
-    zec: zcash.isConfigured()
+    zec: zcash.isConfigured(),
+    ln: lightning.isConfigured()
   })
 });
 
@@ -536,9 +553,16 @@ app.get("/prices", async (req, res) => {
 
 
 let walletsRescan = null
-let xmrRefresh = null
+// The one background refresh in flight, if any. Rescans reload and rewrite
+// wallets.json, so they must never overlap.
+let backgroundRefresh = null
 
-const XMR_REFRESH_MS = Math.max(0, parseInt(process.env.XMR_REFRESH_SECONDS || "120", 10) || 0) * 1000
+function refreshSeconds(name, fallback) {
+  return Math.max(0, parseInt(process.env[name] || fallback, 10) || 0) * 1000
+}
+
+const XMR_REFRESH_MS = refreshSeconds("XMR_REFRESH_SECONDS", "120")
+const LN_REFRESH_MS = refreshSeconds("LN_REFRESH_SECONDS", "60")
 
 
 async function rescanWallets(filter) {
@@ -560,33 +584,35 @@ async function rescanWallets(filter) {
 }
 
 
-// Monero spends only become visible once the view-only wallet is refreshed
-// again, so keep those wallets current without waiting for a manual Refresh.
-async function refreshXmrWallets() {
+// Keep wallets whose balance moves on its own current without a manual
+// Sync: Monero spends only show once the view-only wallet refreshes, and
+// Lightning balances change with every payment. A tick that finds another
+// refresh or a full rescan running is skipped.
+async function refreshWalletsOfType(type) {
 
-  if (walletsRescan || xmrRefresh || !monero.isConfigured()) return
-  if (!wallets.some(w => walletType(w) === "xmr")) return
+  if (walletsRescan || backgroundRefresh) return
+  if (!wallets.some(w => walletType(w) === type)) return
 
-  xmrRefresh = rescanWallets(w => walletType(w) === "xmr")
-    .catch(e => console.error("Monero refresh error:", e))
-    .finally(() => { xmrRefresh = null })
+  backgroundRefresh = rescanWallets(w => walletType(w) === type)
+    .catch(e => console.error(`${type.toUpperCase()} refresh error:`, e))
+    .finally(() => { backgroundRefresh = null })
 
-  await xmrRefresh
+  await backgroundRefresh
 
 }
 
 
-function scheduleXmrRefresh() {
+function scheduleRefresh(type, ms, isConfigured) {
 
-  if (!XMR_REFRESH_MS) return
+  if (!ms || !isConfigured()) return
 
   setTimeout(async () => {
     try {
-      await refreshXmrWallets()
+      await refreshWalletsOfType(type)
     } finally {
-      scheduleXmrRefresh()
+      scheduleRefresh(type, ms, isConfigured)
     }
-  }, XMR_REFRESH_MS)
+  }, ms)
 
 }
 
@@ -601,8 +627,8 @@ app.get("/wallets", async (req, res) => {
       if (!walletsRescan) {
         walletsRescan = (async () => {
           try {
-            if (xmrRefresh) {
-              await xmrRefresh
+            if (backgroundRefresh) {
+              await backgroundRefresh
             }
             await rescanWallets()
           } finally {
@@ -612,7 +638,7 @@ app.get("/wallets", async (req, res) => {
       }
 
       await walletsRescan
-    } else if (!walletsRescan && !xmrRefresh) {
+    } else if (!walletsRescan && !backgroundRefresh) {
       loadWallets();
     }
 
@@ -654,6 +680,18 @@ function validateWalletFields(type, body, { excludeId = null, missingXpubError }
         restoreHeight: info.restoreHeight
       }
     }
+  }
+
+  if (type === "ln") {
+    if (!lightning.isConfigured()) {
+      return { error: "Lightning Node is not installed. Install the Lightning Node app on Umbrel." }
+    }
+    // One wallet entry stands for the whole node, so a second would count it twice.
+    if (others.some(w => walletType(w) === "ln")) {
+      return { error: "Your Lightning node is already added" }
+    }
+    const info = lightning.validateLightningWallet(body)
+    return { fields: { type: "ln", includeOnchain: info.includeOnchain } }
   }
 
   if (type === "zec") {
@@ -869,12 +907,22 @@ async function start() {
     console.log("Zcash lightwalletd not configured")
   }
 
+  if (lightning.isConfigured()) {
+    const result = await lightning.ping()
+    console.log(result.ok
+      ? `LND connected${result.alias ? " (" + result.alias + ")" : ""}`
+      : "LND not reachable: " + result.error)
+  } else {
+    console.log("LND not configured")
+  }
+
   app.listen(appPort, () => {
     console.log(`bitBalance running on port ${appPort}`)
     console.log(`app Version: ${appVersion}`)
   })
 
-  scheduleXmrRefresh()
+  scheduleRefresh("xmr", XMR_REFRESH_MS, monero.isConfigured)
+  scheduleRefresh("ln", LN_REFRESH_MS, lightning.isConfigured)
 
 }
 

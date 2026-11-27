@@ -1,9 +1,13 @@
 let chart
 let walletsCache = []
-const ASSETS = ["btc", "xmr", "zec"]
+const ASSETS = ["btc", "ln", "xmr", "zec"]
+// Assets that existed when the preference was saved as a plain list of
+// enabled assets. Anything newer was never switched off, so it starts on.
+const LEGACY_ASSETS = ["btc", "xmr", "zec"]
 
 // Everything that differs per coin. The first unit in each list is the
 // default; `tooltipUnit` picks the unit shown in a wallet's balance tooltip.
+// `priceAsset` names the coin whose price an asset is valued at.
 const COINS = {
     btc: {
         name: "Bitcoin",
@@ -13,6 +17,18 @@ const COINS = {
             { id: "btc", label: "BTC", format: n => n.toFixed(8) + " BTC" },
             { id: "mbtc", label: "mBTC", format: n => (n * 1000).toFixed(5) + " mBTC" },
             { id: "sats", label: "sats", format: n => btcToSats(n).toLocaleString() + " sats" }
+        ],
+        tooltipUnit: unit => unit === "sats" ? "btc" : "sats"
+    },
+    ln: {
+        name: "Lightning",
+        node: "the Lightning Node app (LND)",
+        color: "#a855f7",
+        priceAsset: "btc",
+        units: [
+            { id: "sats", label: "sats", format: n => btcToSats(n).toLocaleString() + " sats" },
+            { id: "btc", label: "BTC", format: n => n.toFixed(8) + " BTC" },
+            { id: "mbtc", label: "mBTC", format: n => (n * 1000).toFixed(5) + " mBTC" }
         ],
         tooltipUnit: unit => unit === "sats" ? "btc" : "sats"
     },
@@ -37,9 +53,12 @@ const COINS = {
     }
 }
 
-var totals = { btc: 0, xmr: 0, zec: 0 }
+// Coins the server quotes a price for; other assets borrow one (priceAsset)
+const PRICED = ASSETS.filter(a => !COINS[a].priceAsset)
+
+var totals = Object.fromEntries(ASSETS.map(a => [a, 0]))
 var totalFiat = 0
-var prices = { btc: { USD: 0, CAD: 0 }, xmr: { USD: 0, CAD: 0 }, zec: { USD: 0, CAD: 0 } }
+var prices = Object.fromEntries(PRICED.map(a => [a, { USD: 0, CAD: 0 }]))
 var lastPriceFetch = 0
 var fiatCurrency = localStorage.getItem("sovbalance-fiat") === "CAD" ? "CAD" : "USD"
 
@@ -61,20 +80,19 @@ function loadEnabledAssets() {
         const raw = localStorage.getItem("sovbalance-assets")
         if (!raw) return fallback
         const parsed = JSON.parse(raw)
-        const enabled = new Set(
-            Array.isArray(parsed)
-                ? parsed
-                : Object.keys(parsed || {}).filter(k => parsed[k])
-        )
-        const next = Object.fromEntries(ASSETS.map(a => [a, enabled.has(a)]))
+        const isOn = Array.isArray(parsed)
+            ? a => parsed.includes(a) || !LEGACY_ASSETS.includes(a)
+            : a => (parsed && a in parsed) ? !!parsed[a] : true
+        const next = Object.fromEntries(ASSETS.map(a => [a, isOn(a)]))
         return ASSETS.some(a => next[a]) ? next : fallback
     } catch (e) {
         return fallback
     }
 }
 
+// Saved as { asset: on }, so assets added later can tell "off" from "unseen"
 function saveEnabledAssets(flags) {
-    localStorage.setItem("sovbalance-assets", JSON.stringify(ASSETS.filter(asset => flags[asset])))
+    localStorage.setItem("sovbalance-assets", JSON.stringify(Object.fromEntries(ASSETS.map(a => [a, !!flags[a]]))))
 }
 
 // Table order: { key: "name" | "percent" | "currency", dir: 1 | -1 }
@@ -190,8 +208,12 @@ function fiatOf(priceMap) {
     return Number(priceMap[fiatCurrency]) || 0
 }
 
+function priceOf(asset) {
+    return fiatOf(prices[COINS[asset].priceAsset || asset])
+}
+
 function walletFiat(w) {
-    return w.balance * fiatOf(prices[walletAsset(w)])
+    return w.balance * priceOf(walletAsset(w))
 }
 
 function formatFiat(amount, digits = 2) {
@@ -202,8 +224,25 @@ function formatAmount(w) {
     return formatAssetAmount(walletAsset(w), w.balance)
 }
 
+function lightningTitle(w) {
+    const ln = w.lightning
+    if (!ln) return "Lightning node balance"
+    const sats = n => formatAssetAmount("ln", (Number(n) || 0) / 1e8, "sats")
+    const parts = [`Channels ${sats(ln.channels)}`]
+    if (ln.opening) parts.push(`opening ${sats(ln.opening)}`)
+    if (ln.closing) parts.push(`closing ${sats(ln.closing)}`)
+    const onchain = (Number(ln.onchain) || 0) + (Number(ln.onchainUnconfirmed) || 0)
+    parts.push(ln.includeOnchain ? `on-chain ${sats(onchain)}` : `on-chain ${sats(onchain)} not counted`)
+    // The alias is set on the node and lands in a title attribute
+    const alias = String(ln.alias || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
+    const head = alias ? `${alias}: ` : ""
+    const tail = ln.synced ? "" : " Node is still syncing to the chain."
+    return head + parts.join(" · ") + "." + tail
+}
+
 function amountTitle(w) {
     const asset = walletAsset(w)
+    if (asset === "ln") return lightningTitle(w)
     if (asset === "xmr") {
         const auto = w.autoSpends
         if (auto && auto.error) {
@@ -257,7 +296,7 @@ async function loadPrices(force = false) {
 
     const now = Date.now()
 
-    if (!force && ASSETS.some(a => fiatOf(prices[a])) && now - lastPriceFetch < 300000) {
+    if (!force && PRICED.some(a => fiatOf(prices[a])) && now - lastPriceFetch < 300000) {
         return
     }
 
@@ -265,8 +304,8 @@ async function loadPrices(force = false) {
 
         const data = await fetchJson(force ? "/prices?refresh=true" : "/prices", 15000)
 
-        for (const asset of ASSETS) prices[asset] = readFiatMap(data[asset])
-        if (ASSETS.some(a => fiatOf(prices[a]))) {
+        for (const asset of PRICED) prices[asset] = readFiatMap(data[asset])
+        if (PRICED.some(a => fiatOf(prices[a]))) {
             lastPriceFetch = Date.now()
         }
 
@@ -280,7 +319,7 @@ async function loadPrices(force = false) {
 
 function coinTotals(wallets) {
 
-    const sums = { btc: 0, xmr: 0, zec: 0 }
+    const sums = Object.fromEntries(ASSETS.map(a => [a, 0]))
 
     for (const w of wallets) {
         const asset = walletAsset(w)
@@ -298,14 +337,16 @@ function totalId(asset) {
 function paintPrices() {
 
     totals = coinTotals(walletsCache)
-    totalFiat = ASSETS.reduce((sum, a) => sum + totals[a] * fiatOf(prices[a]), 0)
+    totalFiat = ASSETS.reduce((sum, a) => sum + totals[a] * priceOf(a), 0)
 
     document.getElementById("totalTop").innerText = formatFiat(totalFiat) + " " + fiatCurrency
     for (const asset of ASSETS) {
-        const price = fiatOf(prices[asset])
+        const price = priceOf(asset)
         setLine(totalId(asset), assetEnabled(asset),
             formatAssetAmount(asset, totals[asset]), fiatLabel(totals[asset], price))
-        setPriceLine(asset + "Price", assetEnabled(asset) && !!price,
+        // A price is worth showing while any enabled asset is valued at it
+        const usedBy = ASSETS.filter(a => (COINS[a].priceAsset || a) === asset)
+        setPriceLine(asset + "Price", usedBy.some(assetEnabled) && !!price,
             formatFiat(price) + " " + fiatCurrency)
     }
 
@@ -545,7 +586,7 @@ function renderRows() {
 
     if (visible.length === 0) {
         const empty = !availableAssetList().length
-            ? "ℹ️ No node apps detected. Install an Electrum server (Electrs, Fulcrum, ElectrumX), Monero Node, or Zcash Node to track wallets"
+            ? "ℹ️ No node apps detected. Install an Electrum server (Electrs, Fulcrum, ElectrumX), Lightning Node, Monero Node, or Zcash Node to track wallets"
             : wallets.length ? "No wallets for the selected currencies" : "ℹ️ No wallets configured yet"
         document.querySelector("#t tbody").innerHTML = `
         <tr>
@@ -731,7 +772,7 @@ function chartSlices() {
             asset,
             label: asset.toUpperCase(),
             amount,
-            fiat: amount * fiatOf(prices[asset]),
+            fiat: amount * priceOf(asset),
             color: COINS[asset].color
         }
     })
@@ -880,8 +921,13 @@ async function openWalletModal() {
 
     if (!canWrite) return
 
-    const enabled = enabledAssetList()
-    if (!enabled.length) return
+    // One wallet entry stands for the whole Lightning node
+    const hasNode = walletsCache.some(w => walletAsset(w) === "ln")
+    const enabled = enabledAssetList().filter(a => a !== "ln" || !hasNode)
+    if (!enabled.length) {
+        if (hasNode) Swal.fire({ icon: "info", title: "Your Lightning node is already added" })
+        return
+    }
 
     const tabsHtml = enabled.map((asset, i) =>
         `<button type="button" class="asset-tab${i === 0 ? " active" : ""}" data-asset="${asset}">${COINS[asset].name}</button>`
@@ -910,6 +956,11 @@ maxlength="130"
 placeholder="XPUB / YPUB / ZPUB"
 spellcheck="false"></textarea>
 <div id="wallet-type" class="wallet-type"></div>
+</div>
+
+<div id="ln-fields" style="display:none">
+${lightningOnchainField(true)}
+<div class="wallet-hint">Reads your Lightning Node app's balance with its read-only macaroon, which cannot move funds. Channel funds, channels that are still opening, and funds returning from force-closed channels are counted. Untick the box if you already track this node's on-chain wallet as a Bitcoin wallet, so it is not counted twice.</div>
 </div>
 
 <div id="xmr-fields" style="display:none">
@@ -967,6 +1018,11 @@ spellcheck="false"></textarea>
             function validate() {
 
                 const wallet = cleanInput(document.getElementById("swal-wallet").value)
+
+                if (asset === "ln") {
+                    btn.disabled = !wallet
+                    return
+                }
 
                 if (asset === "zec") {
                     const address = val("swal-zec-address")
@@ -1032,6 +1088,10 @@ spellcheck="false"></textarea>
                 }
             }
 
+            if (type === "ln") {
+                return { wallet, type: "ln", includeOnchain: document.getElementById("swal-ln-onchain").checked }
+            }
+
             if (type === "zec") {
                 const zecAddress = val("swal-zec-address")
                 return zecAddress.startsWith("uview1")
@@ -1062,8 +1122,13 @@ async function editWallet(id) {
     const isXmr = asset === "xmr"
     const isZec = asset === "zec"
     const isZecShielded = isZec && !!wallet.ufvk
+    const isLn = asset === "ln"
+    const lnOnchain = wallet.includeOnchain !== false
 
-    const fieldsHtml = isXmr ? `
+    const fieldsHtml = isLn ? `
+${lightningOnchainField(lnOnchain)}
+<div class="wallet-hint">Untick this if you also track this node's on-chain wallet as a Bitcoin wallet.</div>
+` : isXmr ? `
 <textarea id="swal-address" class="swal2-textarea" rows="2">${wallet.address || ""}</textarea>
 <textarea id="swal-viewkey" class="swal2-textarea" rows="2">${wallet.viewKey || ""}</textarea>
 <input id="swal-restore" class="swal2-input" value="${wallet.restoreHeight || 0}" inputmode="numeric">
@@ -1100,6 +1165,14 @@ async function editWallet(id) {
 
         preConfirm: async () => {
             const name = cleanInput(document.getElementById("swal-wallet").value)
+
+            if (isLn) {
+                const includeOnchain = document.getElementById("swal-ln-onchain").checked
+                return {
+                    body: { id: wallet.id, wallet: name, includeOnchain },
+                    rescan: includeOnchain !== lnOnchain
+                }
+            }
 
             if (isZecShielded) {
                 const ufvk = val("swal-ufvk")
@@ -1182,6 +1255,14 @@ async function editWallet(id) {
 
     load(rescan)
 
+}
+
+
+function lightningOnchainField(checked) {
+    return `<label class="wallet-check">
+<input id="swal-ln-onchain" type="checkbox"${checked ? " checked" : ""}>
+<span>Include the node's on-chain funds</span>
+</label>`
 }
 
 

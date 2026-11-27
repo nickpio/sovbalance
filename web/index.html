@@ -6,7 +6,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <meta name="description" content="Monitor Bitcoin, Monero, and Zcash wallet balances using your own node">
+  <meta name="description" content="Monitor Bitcoin, Lightning, Monero, and Zcash wallet balances using your own node">
   <meta name="application-name" content="sovBalance">
   <meta name="author" content="nickpio">
 
@@ -15,12 +15,12 @@
   <link rel="icon" type="image/png" href="/icon.png?v=23">
   <meta name="theme-color" content="#000000">
 
-  <link rel="stylesheet" href="/style.css?v=30">
+  <link rel="stylesheet" href="/style.css?v=31">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-  <script src="/scripts.js?v=36"></script>
+  <script src="/scripts.js?v=37"></script>
 </head>
 
 <body>
@@ -50,6 +50,7 @@
         <div id="totalTop" class="big-value">-</div>
         <div class="coin-totals">
           <div id="totalBTC" class="sub-value"><span class="sub-amount"></span><span class="sub-fiat"></span></div>
+          <div id="totalLN" class="sub-value"><span class="sub-amount"></span><span class="sub-fiat"></span></div>
           <div id="totalXMR" class="sub-value"><span class="sub-amount"></span><span class="sub-fiat"></span></div>
           <div id="totalZEC" class="sub-value"><span class="sub-amount"></span><span class="sub-fiat"></span></div>
         </div>

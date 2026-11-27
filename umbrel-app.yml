@@ -1,22 +1,23 @@
 manifestVersion: 1.1
 id: bitbalance
 name: bitBalance
-tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
+tagline: Track Bitcoin, Lightning, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
 version: "1.7.0"
 port: 3710
 description: >-
-  Track your Bitcoin, Monero, and Zcash wallets privately from your own Umbrel.
+  Track your Bitcoin, Lightning, Monero, and Zcash wallets privately from your own Umbrel.
 
 
-  Monitor Bitcoin balances using XPUB, YPUB, or ZPUB, Monero view-only
+  Monitor Bitcoin balances using XPUB, YPUB, or ZPUB, your Lightning Node's
+  balance with its read-only macaroon, Monero view-only
   wallets using a primary address plus private view key, and Zcash
   transparent addresses or unified viewing keys through your local
   lightwalletd.
 
 
   Automatically detects which node apps you have installed (Electrs,
-  Fulcrum, or ElectrumX for Bitcoin, Monero Node, Zcash Node) and shows
+  Fulcrum, or ElectrumX for Bitcoin, Lightning Node, Monero Node, Zcash Node) and shows
   the matching currencies. Install any one of them to get started. No
   third-party balance APIs.
 

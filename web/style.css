@@ -6,6 +6,7 @@
     --muted: #a3a3a3;
     --border: #2a2a2a;
     --accent: #f7931a;
+    --accent-ln: #a855f7;
     --accent-xmr: #ff6600;
     --accent-zec: #ffd24a;
 }
@@ -218,6 +219,10 @@ td {
 
 #totalBTC {
     color: var(--accent);
+}
+
+#totalLN {
+    color: var(--accent-ln);
 }
 
 #totalXMR {
@@ -433,6 +438,10 @@ footer {
     color: var(--accent);
 }
 
+.settings-row-label.ln {
+    color: var(--accent-ln);
+}
+
 .settings-row-label.xmr {
     color: var(--accent-xmr);
 }
@@ -465,6 +474,23 @@ footer {
     font-size: 13px;
     opacity: .7;
     margin-top: 6px;
+}
+
+.wallet-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 16px auto 0;
+    width: fit-content;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.wallet-check input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-ln);
+    cursor: pointer;
 }
 
 .wallet-hint {
@@ -511,6 +537,12 @@ footer {
     color: #000000;
 }
 
+.asset-tab[data-asset="ln"].active {
+    background: var(--accent-ln);
+    border-color: var(--accent-ln);
+    color: #000000;
+}
+
 .asset-tab[data-asset="xmr"].active {
     background: var(--accent-xmr);
     border-color: var(--accent-xmr);
@@ -536,6 +568,11 @@ footer {
 .coin-badge.btc {
     background: rgba(247, 147, 26, .18);
     color: var(--accent);
+}
+
+.coin-badge.ln {
+    background: rgba(168, 85, 247, .18);
+    color: var(--accent-ln);
 }
 
 .coin-badge.xmr {
