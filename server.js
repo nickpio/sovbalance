@@ -36,6 +36,14 @@ let wallets = [];
 let electrum = null;
 let electrumConnecting = false;
 let electrumReconnectTimer = null;
+let electrumError = null
+
+// Problems the UI should show that are not tied to a single wallet.
+// Each is a message string or null.
+const serverIssues = {
+  storage: null,
+  storageInit: null
+}
 
 console.log("DATA_DIR:", DATA_DIR)
 console.log("DATA_FILE:", DATA_FILE)
@@ -76,6 +84,7 @@ try {
 
 } catch (e) {
   console.error("INIT FS ERROR:", e)
+  serverIssues.storageInit = "Could not prepare the data directory (" + (e.code || e.message) + "). Wallet changes may not be saved."
 }
 
 function normalizeStoredWallet(w) {
@@ -85,13 +94,50 @@ function normalizeStoredWallet(w) {
   return w
 }
 
+// On a read or parse failure the wallets already in memory are kept, so a
+// damaged wallets.json never shows up as an empty list (which the next save
+// would then write back over the file). A file that cannot be parsed is
+// copied aside once so nothing is lost.
+let corruptBackupFor = null
+let corruptBackupName = null
+
 function loadWallets() {
+  let raw
   try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8')
-    wallets = JSON.parse(raw || "[]").map(normalizeStoredWallet)
+    raw = fs.readFileSync(DATA_FILE, 'utf8')
   } catch (e) {
+    if (e.code === "ENOENT") {
+      wallets = []
+      serverIssues.storage = null
+      return
+    }
     console.error("READ ERROR:", e)
-    wallets = []
+    serverIssues.storage = "Could not read wallets.json (" + (e.code || e.message) + ")"
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(raw || "[]")
+    if (!Array.isArray(parsed)) {
+      throw new Error("expected a list of wallets")
+    }
+    wallets = parsed.map(normalizeStoredWallet)
+    serverIssues.storage = null
+  } catch (e) {
+    console.error("PARSE ERROR:", e)
+    if (corruptBackupFor !== raw) {
+      const backup = DATA_FILE + ".corrupt-" + Date.now()
+      try {
+        fs.writeFileSync(backup, raw)
+        corruptBackupFor = raw
+        corruptBackupName = backup.split("/").pop()
+      } catch (be) {
+        console.error("BACKUP ERROR:", be)
+        corruptBackupName = null
+      }
+    }
+    const note = corruptBackupName ? " A copy was saved as " + corruptBackupName + "." : ""
+    serverIssues.storage = "wallets.json is damaged and could not be read (" + e.message + ")." + note
   }
 }
 
@@ -109,11 +155,38 @@ function saveWallets() {
   })
   const payload = JSON.stringify(toSave, null, 2)
   try {
-    fs.writeFileSync(DATA_FILE, payload)
+    writeFileAtomic(DATA_FILE, payload)
   } catch (e) {
-    if (e.code !== "EACCES") throw e
+    if (e.code !== "EACCES") {
+      serverIssues.storage = "Could not save wallets (" + (e.code || e.message) + ")"
+      throw e
+    }
     ensureDataWritable()
-    fs.writeFileSync(DATA_FILE, payload)
+    try {
+      writeFileAtomic(DATA_FILE, payload)
+    } catch (e2) {
+      serverIssues.storage = "Could not save wallets (" + (e2.code === "EACCES" ? "permission denied" : (e2.code || e2.message)) + ")"
+      throw e2
+    }
+  }
+  serverIssues.storage = null
+}
+
+// Write to a temp file and rename so a crash mid-write cannot leave a
+// truncated wallets.json behind.
+function writeFileAtomic(file, data) {
+  const tmp = file + ".tmp"
+  try {
+    fs.writeFileSync(tmp, data)
+    fs.renameSync(tmp, file)
+  } catch (e) {
+    try { fs.unlinkSync(tmp) } catch { }
+    // Some mounts refuse rename; fall back to a direct write.
+    if (e.code === "EXDEV" || e.code === "EPERM" || e.code === "EBUSY") {
+      fs.writeFileSync(file, data)
+      return
+    }
+    throw e
   }
 }
 
@@ -175,6 +248,7 @@ async function connectElectrum() {
     client.onClose = () => {
       console.log("Electrum disconnected")
       if (electrum === client) electrum = null
+      electrumError = "Connection to the Electrum server was lost. Reconnecting…"
       scheduleElectrumReconnect()
     }
 
@@ -185,10 +259,12 @@ async function connectElectrum() {
     await client.server_version("bitBalance", "1.4")
 
     console.log("Electrum connected")
+    electrumError = null
 
   } catch (e) {
 
     console.error("Electrum connect error:", e)
+    electrumError = `Could not connect to the Electrum server at ${HOST}:${PORT} (${e.code || e.message || "unknown error"}). Retrying…`
     closeElectrum()
     scheduleElectrumReconnect()
 
@@ -217,9 +293,29 @@ function addressToScriptHash(address) {
 
 
 async function getAddressBalance(address) {
+  const client = electrum
+  if (!client) {
+    throw new Error("Electrum server is not connected")
+  }
   const sh = addressToScriptHash(address)
-  const utxos = await electrum.blockchainScripthash_listunspent(sh)
+  const utxos = await client.blockchainScripthash_listunspent(sh)
   return (utxos || []).reduce((total, u) => total + u.value, 0)
+}
+
+// One retry per address. A lookup that still fails aborts the scan: counting
+// it as an empty address would report a balance that is silently too low.
+async function getAddressBalanceRetry(address) {
+  try {
+    return await withTimeout(getAddressBalance(address))
+  } catch (first) {
+    await new Promise(r => setTimeout(r, 250))
+    try {
+      return await withTimeout(getAddressBalance(address))
+    } catch (e) {
+      const reason = e && e.message === "timeout" ? "timed out" : (e && e.message) || "failed"
+      throw new Error("Electrum lookup " + reason)
+    }
+  }
 }
 
 
@@ -268,11 +364,7 @@ async function scanBranch(root, change, type) {
       batch.push(buildPayment(child.publicKey).address)
     }
 
-    const balances = await Promise.all(
-      batch.map(a =>
-        withTimeout(getAddressBalance(a)).catch(() => 0)
-      )
-    )
+    const balances = await Promise.all(batch.map(getAddressBalanceRetry))
 
     for (const balance of balances) {
       gap = balance > 0 ? 0 : gap + 1
@@ -320,23 +412,22 @@ function normalizeXpub(key) {
 async function getWalletBalance(xpub) {
   let total = 0
 
+  const info = normalizeXpub(xpub)
+
+  let root
   try {
-    const info = normalizeXpub(xpub)
-
-    const root = bip32.fromBase58(info.key, bitcoin.networks.bitcoin)
-
-    const types = info.type === "auto"
-      ? ["p2pkh", "p2wpkh", "p2sh"]
-      : [info.type]
-
-    for (const t of types) {
-      total += await scanBranch(root, 0, t)
-      total += await scanBranch(root, 1, t)
-    }
-
+    root = bip32.fromBase58(info.key, bitcoin.networks.bitcoin)
   } catch (e) {
-    console.error("Error scanning wallet:", e)
-    total = 0
+    throw new Error("Invalid extended public key: " + e.message)
+  }
+
+  const types = info.type === "auto"
+    ? ["p2pkh", "p2wpkh", "p2sh"]
+    : [info.type]
+
+  for (const t of types) {
+    total += await scanBranch(root, 0, t)
+    total += await scanBranch(root, 1, t)
   }
 
   return total
@@ -403,8 +494,18 @@ async function scanWallet(w) {
     return
   }
 
-  w.balance = await getWalletBalance(w.xpub)
-  delete w.error
+  if (!electrum) {
+    w.error = (electrumError || "Electrum server is not connected") + " Showing the last known balance."
+    return
+  }
+
+  try {
+    w.balance = await getWalletBalance(w.xpub)
+    delete w.error
+  } catch (e) {
+    console.error("Error scanning Bitcoin wallet:", e)
+    w.error = "Scan failed: " + (e.message || "unknown error") + ". Showing the last known balance."
+  }
 
 }
 
@@ -414,6 +515,22 @@ app.get("/appversion", async (req, res) => {
 
 app.get("/health", async (req, res) => {
   res.json({ ok: true })
+});
+
+// Server-wide problems for the UI's notice bar. Each entry is
+// { key, level: "error" | "warning", message }.
+app.get("/status", (req, res) => {
+  const issues = []
+  if (serverIssues.storageInit) {
+    issues.push({ key: "storage-init", level: "error", message: serverIssues.storageInit })
+  }
+  if (serverIssues.storage) {
+    issues.push({ key: "storage", level: "error", message: serverIssues.storage })
+  }
+  if (electrumConfigured() && !electrum && electrumError) {
+    issues.push({ key: "electrum", level: "error", message: electrumError })
+  }
+  res.json({ ok: issues.length === 0, issues })
 });
 
 app.get("/nodes", (req, res) => {
@@ -499,39 +616,65 @@ const PRICE_SOURCES = {
   ]
 }
 
-async function fetchCoinPrices(coin) {
+async function fetchCoinPrices(coin, failures) {
   const prices = emptyFiat()
+  const errors = []
   for (const [source, url, parse] of PRICE_SOURCES[coin]) {
     try {
       mergeFiat(prices, parse(await fetchJsonUrl(url, 5000)))
       if (prices.USD && prices.CAD) return prices
     } catch (e) {
-      console.error(`${coin.toUpperCase()} price ${source}:`, e.message)
+      const reason = e.name === "TimeoutError" ? "timed out" : e.message
+      console.error(`${coin.toUpperCase()} price ${source}:`, reason)
+      errors.push(`${source}: ${reason}`)
     }
   }
+  if (!anyFiat(prices)) {
+    failures[coin] = errors.length ? errors.join("; ") : "no price returned"
+  }
   return prices
+}
+
+function cachedPrices(extra = {}) {
+  return {
+    btc: priceCache.btc,
+    xmr: priceCache.xmr,
+    zec: priceCache.zec,
+    updatedAt: priceCache.at || null,
+    ...extra
+  }
 }
 
 app.get("/prices", async (req, res) => {
   const now = Date.now()
 
   if (req.query.refresh !== "true" && now - priceCache.at < 60000 && (anyFiat(priceCache.btc) || anyFiat(priceCache.xmr) || anyFiat(priceCache.zec))) {
-    return res.json({ btc: priceCache.btc, xmr: priceCache.xmr, zec: priceCache.zec })
+    return res.json(cachedPrices(priceCache.failures ? { failures: priceCache.failures } : {}))
   }
 
+  let error = "Price sources could not be reached"
   try {
-    const [btc, xmr, zec] = await Promise.all([fetchCoinPrices("btc"), fetchCoinPrices("xmr"), fetchCoinPrices("zec")])
+    const failures = {}
+    const [btc, xmr, zec] = await Promise.all([fetchCoinPrices("btc", failures), fetchCoinPrices("xmr", failures), fetchCoinPrices("zec", failures)])
     fillFiatGap(btc, xmr, zec)
 
     if (anyFiat(btc) || anyFiat(xmr) || anyFiat(zec)) {
-      priceCache = { at: now, btc, xmr, zec }
-      return res.json({ btc, xmr, zec })
+      // Keep the last good price for a coin whose sources all failed this time
+      const fresh = { btc, xmr, zec }
+      for (const coin of Object.keys(failures)) {
+        if (anyFiat(priceCache[coin])) fresh[coin] = priceCache[coin]
+      }
+      const hasFailures = Object.keys(failures).length > 0
+      priceCache = { at: now, ...fresh, failures: hasFailures ? failures : null }
+      return res.json(cachedPrices(hasFailures ? { failures } : {}))
     }
+    error = "Price sources could not be reached (" + Object.values(failures)[0] + ")"
   } catch (e) {
     console.error("price error:", e.message)
+    error = "Price lookup failed: " + e.message
   }
 
-  res.json({ btc: priceCache.btc, xmr: priceCache.xmr, zec: priceCache.zec })
+  res.json(cachedPrices({ stale: true, error }))
 });
 
 
@@ -547,7 +690,12 @@ async function rescanWallets(filter) {
 
   for (const w of wallets) {
     if (!filter || filter(w)) {
-      await scanWallet(w);
+      try {
+        await scanWallet(w);
+      } catch (e) {
+        console.error("Error scanning wallet:", e)
+        w.error = "Scan failed: " + (e.message || "unknown error")
+      }
     }
   }
 
@@ -728,6 +876,8 @@ app.post("/wallet/remove", (req, res) => {
   const xpub = (req.body.xpub || "").trim()
   const address = (req.body.address || "").trim()
 
+  const before = wallets.length
+
   if (id !== undefined && id !== null && id !== "") {
     wallets = wallets.filter(w => w.id !== Number(id))
   } else if (xpub) {
@@ -736,6 +886,10 @@ app.post("/wallet/remove", (req, res) => {
     wallets = wallets.filter(w => w.address !== address)
   } else {
     return res.status(400).json({ error: "id required" })
+  }
+
+  if (wallets.length === before) {
+    return res.status(404).json({ error: "wallet not found" })
   }
 
   if (!saveWalletsToResponse(res)) return
@@ -771,11 +925,13 @@ app.post("/wallet/key-images", async (req, res) => {
     current.balance = imported.balance
     current.autoSpends = imported.autoSpends
     delete current.error
-    saveWallets()
+    if (!saveWalletsToResponse(res)) return
     res.json({ ok: true, ...imported })
   } catch (e) {
     console.error("Error importing key images:", e.message)
-    res.status(400).json({ error: e.message })
+    if (!res.headersSent) {
+      res.status(400).json({ error: e.message || "Key image import failed" })
+    }
   }
 
 })
@@ -840,6 +996,25 @@ function withTimeout(p, ms = 5000) {
 }
 
 
+// Malformed request bodies and anything thrown inside a route come back as
+// JSON, so the UI can show the message instead of an HTML error page.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err)
+  const status = err.status || err.statusCode || 500
+  const message = err.type === "entity.parse.failed"
+    ? "Request body is not valid JSON"
+    : err.type === "entity.too.large"
+      ? "Request is too large"
+      : status >= 500 ? "Internal server error: " + (err.message || "unknown") : (err.message || "Bad request")
+  if (status >= 500) console.error("REQUEST ERROR:", req.method, req.url, err)
+  res.status(status).json({ error: message })
+})
+
+process.on("unhandledRejection", e => {
+  console.error("UNHANDLED REJECTION:", e)
+})
+
+
 async function start() {
 
   if (electrumConfigured()) {
@@ -869,13 +1044,21 @@ async function start() {
     console.log("Zcash lightwalletd not configured")
   }
 
-  app.listen(appPort, () => {
+  const server = app.listen(appPort, () => {
     console.log(`bitBalance running on port ${appPort}`)
     console.log(`app Version: ${appVersion}`)
+  })
+
+  server.on("error", e => {
+    console.error(`Could not listen on port ${appPort}:`, e.message)
+    process.exit(1)
   })
 
   scheduleXmrRefresh()
 
 }
 
-start()
+start().catch(e => {
+  console.error("STARTUP ERROR:", e)
+  process.exit(1)
+})

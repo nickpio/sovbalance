@@ -2,3 +2,5 @@ vendor/cryptonight/cn-slow-hash
 node_modules/
 zecscan/target/
 data/monero/
+data/wallets.json.corrupt-*
+data/wallets.json.tmp

@@ -554,6 +554,79 @@ footer {
     margin-top: 4px;
 }
 
+.wallet-warning {
+    color: #f59e0b;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.notices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.notices[hidden] {
+    display: none;
+}
+
+.notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid;
+    font-size: 14px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.notice-error {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.55);
+    color: #fca5a5;
+}
+
+.notice-warning {
+    background: rgba(245, 158, 11, 0.10);
+    border-color: rgba(245, 158, 11, 0.5);
+    color: #fcd34d;
+}
+
+.notice-icon {
+    flex: none;
+    font-weight: 700;
+}
+
+.notice-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.notice-close {
+    flex: none;
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    opacity: .8;
+}
+
+.notice-close:hover {
+    opacity: 1;
+}
+
+.btn-inline {
+    margin-left: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
 .wallet-sync {
     margin-top: 6px;
     max-width: 160px;
