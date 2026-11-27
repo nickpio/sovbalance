@@ -3,13 +3,13 @@ version: "3.7"
 services:
   app_proxy:
     environment:
-      APP_HOST: sovbalance_app_1
+      APP_HOST: personal-sovbalance_app_1
       APP_PORT: 3710
       PROXY_AUTH_WHITELIST: "*"
       PROXY_AUTH_BLACKLIST: "/wallet,/wallet/*"
 
   app:
-    image: ghcr.io/nickpio/sovbalance/app:1.7.6@sha256:fe0b74b28bacab8b29838d85d49e8456cce07ad83ca0d3a027791afa2ef6fe2a
+    image: ghcr.io/nickpio/sovbalance/app:1.7.7@sha256:841e69447a74bd5dde02a02a37cca3031c162f178ea7afb707be1e089ecc5053
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
