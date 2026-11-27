@@ -33,6 +33,9 @@ use zcash_protocol::consensus::{BlockHeight, Network, NetworkType, NetworkUpgrad
 
 const BATCH_SIZE: u32 = 100;
 
+type AppWalletDb = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
+type LwdClient = CompactTxStreamerClient<tonic::transport::Channel>;
+
 #[derive(Parser)]
 #[command(name = "zec-scan", about = "View-only Zcash scanner for unified viewing keys")]
 struct Cli {
@@ -48,20 +51,23 @@ enum Command {
         ufvk: Option<String>,
     },
     /// Sync a view-only wallet and print its balance as JSON
-    Scan {
-        #[arg(long)]
-        lwd: String,
-        #[arg(long)]
-        tls_domain: Option<String>,
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long)]
-        ufvk: Option<String>,
-        #[arg(long)]
-        birthday: u32,
-        #[arg(long, default_value_t = 0)]
-        max_seconds: u64,
-    },
+    Scan(ScanArgs),
+}
+
+#[derive(clap::Args)]
+struct ScanArgs {
+    #[arg(long)]
+    lwd: String,
+    #[arg(long)]
+    tls_domain: Option<String>,
+    #[arg(long)]
+    db: PathBuf,
+    #[arg(long)]
+    ufvk: Option<String>,
+    #[arg(long)]
+    birthday: u32,
+    #[arg(long, default_value_t = 0)]
+    max_seconds: u64,
 }
 
 #[derive(Default)]
@@ -126,10 +132,7 @@ impl BlockCache for MemBlockCache {
         let start = u64::from(range.block_range().start);
         let end = u64::from(range.block_range().end);
         let mut blocks = self.blocks.lock().expect("mem block cache poisoned");
-        let keys: Vec<u64> = blocks.range(start..end).map(|(k, _)| *k).collect();
-        for k in keys {
-            blocks.remove(&k);
-        }
+        blocks.retain(|k, _| *k < start || *k >= end);
         Ok(())
     }
 }
@@ -161,7 +164,7 @@ fn decode_mainnet_ufvk(raw: &str) -> anyhow::Result<UnifiedFullViewingKey> {
         .map_err(|e| anyhow!("Invalid unified viewing key: {e}"))
 }
 
-fn open_wallet(path: &Path) -> anyhow::Result<WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>> {
+fn open_wallet(path: &Path) -> anyhow::Result<AppWalletDb> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create wallet directory {}", parent.display()))?;
@@ -176,12 +179,12 @@ fn open_wallet(path: &Path) -> anyhow::Result<WalletDb<rusqlite::Connection, Net
     Ok(db)
 }
 
-fn lwd_endpoint(raw: &str) -> anyhow::Result<String> {
+fn lwd_endpoint(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        Ok(trimmed.to_string())
+        trimmed.to_string()
     } else {
-        Ok(format!("http://{trimmed}"))
+        format!("http://{trimmed}")
     }
 }
 
@@ -282,10 +285,7 @@ fn as_http(url: &str) -> String {
     }
 }
 
-async fn open_tls_verified(
-    endpoint: &str,
-    domain: &str,
-) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+async fn open_tls_verified(endpoint: &str, domain: &str) -> anyhow::Result<LwdClient> {
     let tls = tonic::transport::ClientTlsConfig::new()
         .domain_name(domain)
         .with_enabled_roots()
@@ -302,7 +302,7 @@ async fn open_tls_verified(
 async fn open_tls_insecure(
     endpoint: &str,
     tls_domain: Option<&str>,
-) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+) -> anyhow::Result<LwdClient> {
     let sni = tls_domain
         .filter(|d| !d.is_empty())
         .map(|d| d.to_string())
@@ -334,10 +334,7 @@ async fn open_tls_insecure(
     Ok(CompactTxStreamerClient::new(channel))
 }
 
-async fn open_tls_client(
-    endpoint: &str,
-    tls_domain: Option<&str>,
-) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+async fn open_tls_client(endpoint: &str, tls_domain: Option<&str>) -> anyhow::Result<LwdClient> {
     let domain = tls_domain.filter(|d| !d.is_empty()).map(|d| d.to_string()).or_else(|| {
         url_host(endpoint).filter(|host| host.parse::<std::net::IpAddr>().is_err())
     });
@@ -352,10 +349,7 @@ async fn open_tls_client(
     open_tls_insecure(endpoint, tls_domain).await
 }
 
-async fn open_client(
-    endpoint: &str,
-    tls_domain: Option<&str>,
-) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+async fn open_client(endpoint: &str, tls_domain: Option<&str>) -> anyhow::Result<LwdClient> {
     eprintln!("connecting to {endpoint}");
     if endpoint.starts_with("https://") {
         return open_tls_client(endpoint, tls_domain).await;
@@ -368,9 +362,7 @@ async fn open_client(
     Ok(CompactTxStreamerClient::new(channel))
 }
 
-async fn handshake(
-    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
-) -> anyhow::Result<()> {
+async fn handshake(client: &mut LwdClient) -> anyhow::Result<()> {
     client
         .get_lightd_info(service::Empty::default())
         .await
@@ -378,20 +370,14 @@ async fn handshake(
     Ok(())
 }
 
-async fn open_and_handshake(
-    endpoint: &str,
-    tls_domain: Option<&str>,
-) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
+async fn open_and_handshake(endpoint: &str, tls_domain: Option<&str>) -> anyhow::Result<LwdClient> {
     let mut client = open_client(endpoint, tls_domain).await?;
     handshake(&mut client).await?;
     Ok(client)
 }
 
-async fn connect_lwd(
-    lwd: &str,
-    tls_domain: Option<&str>,
-) -> anyhow::Result<CompactTxStreamerClient<tonic::transport::Channel>> {
-    let endpoint = lwd_endpoint(lwd)?;
+async fn connect_lwd(lwd: &str, tls_domain: Option<&str>) -> anyhow::Result<LwdClient> {
+    let endpoint = lwd_endpoint(lwd);
     match open_and_handshake(&endpoint, tls_domain).await {
         Ok(client) => Ok(client),
         Err(e) if endpoint.starts_with("http://") && is_transport_error(e.root_cause()) => {
@@ -408,34 +394,26 @@ async fn connect_lwd(
     }
 }
 
-async fn fetch_chain_tip(
-    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
-) -> anyhow::Result<u32> {
-    match client
+async fn fetch_chain_tip(client: &mut LwdClient) -> anyhow::Result<u32> {
+    let height = match client
         .get_latest_block(service::ChainSpec::default())
         .await
     {
-        Ok(res) => res
+        Ok(res) => res.into_inner().height,
+        Err(e) => client
+            .get_lightd_info(service::Empty::default())
+            .await
+            .with_context(|| format!("fetch chain tip: {e}"))?
             .into_inner()
-            .height
-            .try_into()
-            .context("chain tip height does not fit in u32"),
-        Err(e) => {
-            let height = client
-                .get_lightd_info(service::Empty::default())
-                .await
-                .with_context(|| format!("fetch chain tip: {e}"))?
-                .into_inner()
-                .block_height;
-            height
-                .try_into()
-                .context("chain tip height does not fit in u32")
-        }
-    }
+            .block_height,
+    };
+    height
+        .try_into()
+        .context("chain tip height does not fit in u32")
 }
 
 async fn wallet_birthday(
-    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+    client: &mut LwdClient,
     birthday_height: BlockHeight,
     recover_until: Option<BlockHeight>,
 ) -> anyhow::Result<AccountBirthday> {
@@ -473,8 +451,8 @@ async fn wallet_birthday(
 }
 
 async fn ensure_account(
-    db: &mut WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
-    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+    db: &mut AppWalletDb,
+    client: &mut LwdClient,
     ufvk: &UnifiedFullViewingKey,
     birthday_height: u32,
 ) -> anyhow::Result<()> {
@@ -515,9 +493,7 @@ fn reported_balances(
     (transparent, shielded.saturating_add(transparent))
 }
 
-fn wallet_transparent_addresses(
-    db: &WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
-) -> anyhow::Result<Vec<String>> {
+fn wallet_transparent_addresses(db: &AppWalletDb) -> anyhow::Result<Vec<String>> {
     let params = Network::MainNetwork;
     let mut addresses = Vec::new();
     for account_id in db.get_account_ids().context("list accounts")? {
@@ -534,7 +510,7 @@ fn wallet_transparent_addresses(
 }
 
 async fn chain_transparent_balance(
-    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+    client: &mut LwdClient,
     addresses: &[String],
 ) -> anyhow::Result<u64> {
     if addresses.is_empty() {
@@ -561,42 +537,33 @@ async fn chain_transparent_balance(
 }
 
 fn summary_value(
-    db: &WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
+    db: &AppWalletDb,
     tip: u32,
     birthday: u32,
     timed_out: bool,
     chain_transparent: Option<u64>,
 ) -> anyhow::Result<serde_json::Value> {
     let policy = ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(1).expect("nonzero"), true);
-    let (synced, height, sapling, orchard, ironwood, transparent, total) =
-        if let Some(summary) = db.get_wallet_summary(policy).context("wallet summary")? {
-            let mut sapling = 0u64;
-            let mut orchard = 0u64;
-            let mut ironwood = 0u64;
-            let mut wallet_transparent = 0u64;
-            let mut wallet_total = 0u64;
-            for balance in summary.account_balances().values() {
-                sapling = sapling.saturating_add(balance.sapling_balance().total().into_u64());
-                orchard = orchard.saturating_add(balance.orchard_balance().total().into_u64());
-                ironwood = ironwood.saturating_add(balance.ironwood_balance().total().into_u64());
-                wallet_transparent = wallet_transparent
-                    .saturating_add(balance.unshielded_balance().total().into_u64());
-                wallet_total = wallet_total.saturating_add(balance.total().into_u64());
-            }
-            let (transparent, total) =
-                reported_balances(wallet_total, wallet_transparent, chain_transparent);
-            (
-                summary.is_synced() && !timed_out,
-                u32::from(summary.fully_scanned_height()),
-                sapling,
-                orchard,
-                ironwood,
-                transparent,
-                total,
-            )
-        } else {
-            (false, 0, 0, 0, 0, 0, 0)
-        };
+    let (mut synced, mut height) = (false, 0u32);
+    let (mut sapling, mut orchard, mut ironwood, mut transparent, mut total) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
+
+    if let Some(summary) = db.get_wallet_summary(policy).context("wallet summary")? {
+        let mut wallet_transparent = 0u64;
+        let mut wallet_total = 0u64;
+        for balance in summary.account_balances().values() {
+            sapling = sapling.saturating_add(balance.sapling_balance().total().into_u64());
+            orchard = orchard.saturating_add(balance.orchard_balance().total().into_u64());
+            ironwood = ironwood.saturating_add(balance.ironwood_balance().total().into_u64());
+            wallet_transparent = wallet_transparent
+                .saturating_add(balance.unshielded_balance().total().into_u64());
+            wallet_total = wallet_total.saturating_add(balance.total().into_u64());
+        }
+        (transparent, total) =
+            reported_balances(wallet_total, wallet_transparent, chain_transparent);
+        synced = summary.is_synced() && !timed_out;
+        height = u32::from(summary.fully_scanned_height());
+    }
 
     Ok(serde_json::json!({
         "synced": synced,
@@ -639,9 +606,9 @@ fn emit_height_progress(path: &Path, tip: u32, birthday: u32) {
 }
 
 async fn run_scan(
-    client: &mut CompactTxStreamerClient<tonic::transport::Channel>,
+    client: &mut LwdClient,
     cache: &MemBlockCache,
-    db: &mut WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>,
+    db: &mut AppWalletDb,
     max_seconds: u64,
     tip: u32,
     birthday: u32,
@@ -657,18 +624,15 @@ async fn run_scan(
         }
     });
 
+    let sync_fut =
+        zcash_client_backend::sync::run(client, &Network::MainNetwork, cache, db, BATCH_SIZE);
     let result = if max_seconds == 0 {
-        zcash_client_backend::sync::run(client, &Network::MainNetwork, cache, db, BATCH_SIZE)
+        sync_fut
             .await
             .map_err(|e| anyhow!("wallet sync failed: {e}"))
             .map(|()| false)
     } else {
-        match tokio::time::timeout(
-            Duration::from_secs(max_seconds),
-            zcash_client_backend::sync::run(client, &Network::MainNetwork, cache, db, BATCH_SIZE),
-        )
-        .await
-        {
+        match tokio::time::timeout(Duration::from_secs(max_seconds), sync_fut).await {
             Ok(Ok(())) => Ok(false),
             Ok(Err(e)) => Err(anyhow!("wallet sync failed: {e}")),
             Err(_) => {
@@ -683,7 +647,7 @@ async fn run_scan(
 }
 
 async fn scan(args: ScanArgs) -> anyhow::Result<()> {
-    let ufvk = decode_mainnet_ufvk(&args.ufvk)?;
+    let ufvk = decode_mainnet_ufvk(&ufvk_arg(args.ufvk)?)?;
     let cache = MemBlockCache::default();
     let mut db = open_wallet(&args.db)?;
     let mut client = connect_lwd(&args.lwd, args.tls_domain.as_deref()).await?;
@@ -734,15 +698,6 @@ async fn scan(args: ScanArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct ScanArgs {
-    lwd: String,
-    tls_domain: Option<String>,
-    db: PathBuf,
-    ufvk: String,
-    birthday: u32,
-    max_seconds: u64,
-}
-
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
@@ -759,24 +714,7 @@ async fn run() -> anyhow::Result<()> {
             println!("ok");
             Ok(())
         }
-        Command::Scan {
-            lwd,
-            tls_domain,
-            db,
-            ufvk,
-            birthday,
-            max_seconds,
-        } => {
-            scan(ScanArgs {
-                lwd,
-                tls_domain,
-                db,
-                ufvk: ufvk_arg(ufvk)?,
-                birthday,
-                max_seconds,
-            })
-            .await
-        }
+        Command::Scan(args) => scan(args).await,
     }
 }
 

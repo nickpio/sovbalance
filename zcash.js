@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const fs = require("fs")
+const net = require("net")
 const path = require("path")
 const tls = require("tls")
 const { spawn, spawnSync } = require("child_process")
@@ -68,16 +69,7 @@ function zecScanBin() {
 
 
 function isIpHost(host) {
-  return Boolean(host) && (netIsIp(host) || host.includes(":"))
-}
-
-
-function netIsIp(host) {
-  const parts = host.split(".")
-  return parts.length === 4 && parts.every(p => {
-    const n = Number(p)
-    return Number.isInteger(n) && n >= 0 && n <= 255 && String(n) === p
-  })
+  return Boolean(host) && (net.isIP(host) !== 0 || host.includes(":"))
 }
 
 
@@ -241,12 +233,19 @@ function lastNonEmptyLine(text) {
 }
 
 
-function runZecScan(args, options = {}) {
+function requireZecScanBin() {
   const bin = zecScanBin()
 
   if (!bin) {
     throw new Error("Shielded Zcash scanning is not available. Rebuild the app with the zec-scan helper.")
   }
+
+  return bin
+}
+
+
+function runZecScan(args, options = {}) {
+  const bin = requireZecScanBin()
 
   const result = spawnSync(bin, args, {
     encoding: "utf8",
@@ -306,10 +305,11 @@ function syncSnapshot(parsed, wallet) {
 
 function runZecScanAsync(args, options = {}) {
   return new Promise((resolve, reject) => {
-    const bin = zecScanBin()
-
-    if (!bin) {
-      reject(new Error("Shielded Zcash scanning is not available. Rebuild the app with the zec-scan helper."))
+    let bin
+    try {
+      bin = requireZecScanBin()
+    } catch (e) {
+      reject(e)
       return
     }
 
@@ -493,6 +493,7 @@ async function getWalletBalance(wallet, onProgress) {
 module.exports = {
   isConfigured,
   ping,
+  syncSnapshot,
   validateZcashWallet,
   getWalletBalance
 }

@@ -78,22 +78,24 @@ try {
   console.error("INIT FS ERROR:", e)
 }
 
-try {
-  const raw = fs.readFileSync(DATA_FILE, 'utf8')
-  wallets = JSON.parse(raw || "[]")
-  wallets = wallets.map(normalizeStoredWallet)
-} catch (e) {
-  console.error("READ ERROR:", e)
-  wallets = []
-}
-
-
 function normalizeStoredWallet(w) {
   if (!w.type) {
     w.type = w.address ? "xmr" : "btc"
   }
   return w
 }
+
+function loadWallets() {
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf8')
+    wallets = JSON.parse(raw || "[]").map(normalizeStoredWallet)
+  } catch (e) {
+    console.error("READ ERROR:", e)
+    wallets = []
+  }
+}
+
+loadWallets()
 
 
 function saveWallets() {
@@ -215,39 +217,37 @@ function addressToScriptHash(address) {
 
 
 async function getAddressBalance(address) {
-
   const sh = addressToScriptHash(address)
-
   const utxos = await electrum.blockchainScripthash_listunspent(sh)
-
-  if (!utxos || utxos.length === 0)
-    return 0
-
-  let total = 0
-
-  for (const u of utxos) {
-    total += u.value
-  }
-
-  return total
+  return (utxos || []).reduce((total, u) => total + u.value, 0)
 }
 
 
 function validateKey(key) {
-
   if (key.length < 100) {
     throw new Error("Invalid XPUB/ZPUB length")
   }
-
 }
 
+
+const PAYMENT_BUILDERS = {
+  p2wpkh: pubkey => bitcoin.payments.p2wpkh({ pubkey, network: bitcoin.networks.bitcoin }),
+  p2sh: pubkey => bitcoin.payments.p2sh({
+    redeem: bitcoin.payments.p2wpkh({ pubkey, network: bitcoin.networks.bitcoin })
+  }),
+  p2pkh: pubkey => bitcoin.payments.p2pkh({ pubkey, network: bitcoin.networks.bitcoin })
+}
 
 
 async function scanBranch(root, change, type) {
 
-
   if (type === "auto") {
     throw new Error("scanBranch must receive a single type")
+  }
+
+  const buildPayment = PAYMENT_BUILDERS[type]
+  if (!buildPayment) {
+    throw new Error("Invalid address type")
   }
 
   const branch = root.derive(change)
@@ -264,41 +264,8 @@ async function scanBranch(root, change, type) {
     const batch = []
 
     for (let i = 0; i < concurrency; i++) {
-
-      const child = branch.derive(index)
-
-      let payment;
-
-      if (type === "p2wpkh") {
-        payment = bitcoin.payments.p2wpkh({
-          pubkey: child.publicKey,
-          network: bitcoin.networks.bitcoin
-        })
-      }
-
-      if (type === "p2sh") {
-        payment = bitcoin.payments.p2sh({
-          redeem: bitcoin.payments.p2wpkh({
-            pubkey: child.publicKey,
-            network: bitcoin.networks.bitcoin
-          })
-        })
-      }
-
-      if (type === "p2pkh") {
-        payment = bitcoin.payments.p2pkh({
-          pubkey: child.publicKey,
-          network: bitcoin.networks.bitcoin
-        })
-      }
-
-      if (!payment) {
-        throw new Error("Invalid address type")
-      }
-
-      batch.push(payment.address)
-
-      index++
+      const child = branch.derive(index++)
+      batch.push(buildPayment(child.publicKey).address)
     }
 
     const balances = await Promise.all(
@@ -307,16 +274,8 @@ async function scanBranch(root, change, type) {
       )
     )
 
-    for (let i = 0; i < concurrency; i++) {
-
-      const balance = balances[i]
-
-      if (balance > 0) {
-        gap = 0
-      } else {
-        gap++
-      }
-
+    for (const balance of balances) {
+      gap = balance > 0 ? 0 : gap + 1
       total += balance
     }
 
@@ -388,17 +347,6 @@ async function getWalletBalance(xpub) {
 
 
 
-async function loadWallets() {
-
-  try {
-    wallets = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")).map(normalizeStoredWallet)
-  } catch {
-    wallets = []
-  }
-
-}
-
-
 function applyZecSync(w, parsed) {
   if (!parsed) return
   if (parsed.total !== undefined) {
@@ -407,21 +355,7 @@ function applyZecSync(w, parsed) {
       w.balance = total
     }
   }
-  const height = Number(parsed.height || 0)
-  const tip = Number(parsed.tip || 0)
-  const birthday = Number(parsed.birthday || w.birthday || 0)
-  let percent = Number(parsed.percent)
-  if (!Number.isFinite(percent)) {
-    percent = tip > birthday
-      ? ((height - birthday) * 100) / (tip - birthday)
-      : 0
-  }
-  w.sync = {
-    height,
-    tip,
-    birthday,
-    percent: Math.round(percent * 10) / 10
-  }
+  w.sync = zcash.syncSnapshot(parsed, w)
   delete w.error
 }
 
@@ -540,68 +474,40 @@ function krakenQuotes(data) {
   return out
 }
 
-function geckoQuotes(coin) {
+function pickFiat(obj) {
   const out = emptyFiat()
-  if (!coin) return out
-  const usd = Number(coin.usd)
-  const cad = Number(coin.cad)
+  if (!obj) return out
+  const usd = Number(obj.USD ?? obj.usd)
+  const cad = Number(obj.CAD ?? obj.cad)
   if (usd > 0) out.USD = usd
   if (cad > 0) out.CAD = cad
   return out
 }
 
-async function fetchBtcPrices() {
-  const prices = emptyFiat()
-  try {
-    const data = await fetchJsonUrl("https://mempool.space/api/v1/prices", 5000)
-    const usd = Number(data.USD)
-    const cad = Number(data.CAD)
-    if (usd > 0) prices.USD = usd
-    if (cad > 0) prices.CAD = cad
-    if (prices.USD && prices.CAD) return prices
-  } catch (e) {
-    console.error("BTC price mempool:", e.message)
-  }
-  try {
-    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,XBTCAD", 5000)
-    mergeFiat(prices, krakenQuotes(data))
-  } catch (e) {
-    console.error("BTC price kraken:", e.message)
-  }
-  return prices
+const PRICE_SOURCES = {
+  btc: [
+    ["mempool", "https://mempool.space/api/v1/prices", pickFiat],
+    ["kraken", "https://api.kraken.com/0/public/Ticker?pair=XBTUSD,XBTCAD", krakenQuotes]
+  ],
+  xmr: [
+    ["kraken", "https://api.kraken.com/0/public/Ticker?pair=XMRUSD", krakenQuotes],
+    ["coingecko", "https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd,cad", d => pickFiat(d.monero)]
+  ],
+  zec: [
+    ["kraken", "https://api.kraken.com/0/public/Ticker?pair=ZECUSD", krakenQuotes],
+    ["coingecko", "https://api.coingecko.com/api/v3/simple/price?ids=zcash&vs_currencies=usd,cad", d => pickFiat(d.zcash)]
+  ]
 }
 
-async function fetchXmrPrices() {
+async function fetchCoinPrices(coin) {
   const prices = emptyFiat()
-  try {
-    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=XMRUSD", 5000)
-    mergeFiat(prices, krakenQuotes(data))
-  } catch (e) {
-    console.error("XMR price kraken:", e.message)
-  }
-  try {
-    const data = await fetchJsonUrl("https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd,cad", 5000)
-    mergeFiat(prices, geckoQuotes(data.monero))
-  } catch (e) {
-    console.error("XMR price coingecko:", e.message)
-  }
-  return prices
-}
-
-async function fetchZecPrices() {
-  const prices = emptyFiat()
-  try {
-    const data = await fetchJsonUrl("https://api.kraken.com/0/public/Ticker?pair=ZECUSD", 5000)
-    mergeFiat(prices, krakenQuotes(data))
-    if (prices.USD && prices.CAD) return prices
-  } catch (e) {
-    console.error("ZEC price kraken:", e.message)
-  }
-  try {
-    const data = await fetchJsonUrl("https://api.coingecko.com/api/v3/simple/price?ids=zcash&vs_currencies=usd,cad", 5000)
-    mergeFiat(prices, geckoQuotes(data.zcash))
-  } catch (e) {
-    console.error("ZEC price coingecko:", e.message)
+  for (const [source, url, parse] of PRICE_SOURCES[coin]) {
+    try {
+      mergeFiat(prices, parse(await fetchJsonUrl(url, 5000)))
+      if (prices.USD && prices.CAD) return prices
+    } catch (e) {
+      console.error(`${coin.toUpperCase()} price ${source}:`, e.message)
+    }
   }
   return prices
 }
@@ -614,7 +520,7 @@ app.get("/prices", async (req, res) => {
   }
 
   try {
-    const [btc, xmr, zec] = await Promise.all([fetchBtcPrices(), fetchXmrPrices(), fetchZecPrices()])
+    const [btc, xmr, zec] = await Promise.all([fetchCoinPrices("btc"), fetchCoinPrices("xmr"), fetchCoinPrices("zec")])
     fillFiatGap(btc, xmr, zec)
 
     if (anyFiat(btc) || anyFiat(xmr) || anyFiat(zec)) {
@@ -637,7 +543,7 @@ const XMR_REFRESH_MS = Math.max(0, parseInt(process.env.XMR_REFRESH_SECONDS || "
 
 async function rescanWallets(filter) {
 
-  await loadWallets();
+  loadWallets();
 
   for (const w of wallets) {
     if (!filter || filter(w)) {
@@ -707,7 +613,7 @@ app.get("/wallets", async (req, res) => {
 
       await walletsRescan
     } else if (!walletsRescan && !xmrRefresh) {
-      await loadWallets();
+      loadWallets();
     }
 
     wallets.sort((a, b) => a.wallet.localeCompare(b.wallet));
@@ -727,103 +633,84 @@ app.get("/wallet", (req, res) => {
 })
 
 
+function validateWalletFields(type, body, { excludeId = null, missingXpubError }) {
+  const others = excludeId === null ? wallets : wallets.filter(w => w.id !== excludeId)
+
+  if (type === "xmr") {
+    let info
+    try {
+      info = monero.validateMoneroWallet(body)
+    } catch (e) {
+      return { error: e.message }
+    }
+    if (others.some(w => w.address === info.address && walletType(w) === "xmr")) {
+      return { error: "address already exists" }
+    }
+    return {
+      fields: {
+        type: "xmr",
+        address: info.address,
+        viewKey: info.viewKey,
+        restoreHeight: info.restoreHeight
+      }
+    }
+  }
+
+  if (type === "zec") {
+    let info
+    try {
+      info = zcash.validateZcashWallet(body)
+    } catch (e) {
+      return { error: e.message }
+    }
+    if (info.ufvk) {
+      if (others.some(w => w.ufvk === info.ufvk && walletType(w) === "zec")) {
+        return { error: "viewing key already exists" }
+      }
+      return { fields: { type: "zec", ufvk: info.ufvk, birthday: info.birthday } }
+    }
+    if (others.some(w => w.address === info.address && walletType(w) === "zec")) {
+      return { error: "address already exists" }
+    }
+    return { fields: { type: "zec", address: info.address } }
+  }
+
+  const xpub = (body.xpub || "").trim()
+  if (!xpub) {
+    return { error: missingXpubError }
+  }
+  try {
+    validateKey(xpub)
+  } catch (e) {
+    return { error: e.message }
+  }
+  if (others.some(w => w.xpub === xpub)) {
+    return { error: "xpub already exists" }
+  }
+  return { fields: { type: "btc", xpub } }
+}
+
+
 app.post("/wallet", (req, res) => {
 
   try {
 
-  const wallet = (req.body.wallet || "").trim()
-  const type = (req.body.type || "btc").trim().toLowerCase()
+    const wallet = (req.body.wallet || "").trim()
+    const type = (req.body.type || "btc").trim().toLowerCase()
 
-  if (!wallet)
-    return res.status(400).json({ error: "wallet required" })
+    if (!wallet)
+      return res.status(400).json({ error: "wallet required" })
 
-  const id = wallets.length > 0 ? Math.max(...wallets.map(w => w.id)) + 1 : 0;
+    const validated = validateWalletFields(type, req.body, { missingXpubError: "wallet/xpub required" })
+    if (validated.error)
+      return res.status(400).json({ error: validated.error })
 
-  if (type === "xmr") {
+    const id = wallets.length > 0 ? Math.max(...wallets.map(w => w.id)) + 1 : 0
+    wallets.push({ id, wallet, ...validated.fields, balance: 0 })
 
-    let info
+    if (!saveWalletsToResponse(res)) return
 
-    try {
-      info = monero.validateMoneroWallet(req.body)
-    } catch (e) {
-      return res.status(400).json({ error: e.message })
-    }
-
-    if (wallets.some(w => w.address === info.address && w.type === "xmr")) {
-      return res.status(400).json({ error: "address already exists" })
-    }
-
-    wallets.push({
-      id,
-      wallet,
-      type: "xmr",
-      address: info.address,
-      viewKey: info.viewKey,
-      restoreHeight: info.restoreHeight,
-      balance: 0
-    })
-
-  } else if (type === "zec") {
-
-    let info
-
-    try {
-      info = zcash.validateZcashWallet(req.body)
-    } catch (e) {
-      return res.status(400).json({ error: e.message })
-    }
-
-    if (info.ufvk) {
-      if (wallets.some(w => w.ufvk === info.ufvk && w.type === "zec")) {
-        return res.status(400).json({ error: "viewing key already exists" })
-      }
-
-      wallets.push({
-        id,
-        wallet,
-        type: "zec",
-        ufvk: info.ufvk,
-        birthday: info.birthday,
-        balance: 0
-      })
-    } else {
-      if (wallets.some(w => w.address === info.address && w.type === "zec")) {
-        return res.status(400).json({ error: "address already exists" })
-      }
-
-      wallets.push({
-        id,
-        wallet,
-        type: "zec",
-        address: info.address,
-        balance: 0
-      })
-    }
-
-  } else {
-
-    const xpub = (req.body.xpub || "").trim()
-
-    if (!xpub)
-      return res.status(400).json({ error: "wallet/xpub required" })
-
-    try {
-      validateKey(xpub)
-    } catch (e) {
-      return res.status(400).json({ error: e.message })
-    }
-
-    if (wallets.some(w => w.xpub === xpub)) {
-      return res.status(400).json({ error: "xpub already exists" })
-    }
-
-    wallets.push({ id, wallet, type: "btc", xpub, balance: 0 })
-
-  }
-
-  if (!saveWalletsToResponse(res)) return
-
-  res.json({ ok: true })
+    res.json({ ok: true })
 
   } catch (e) {
     console.error("SAVE WALLET ERROR:", e)
@@ -915,77 +802,24 @@ app.post("/wallet/update", (req, res) => {
   }
 
   const current = wallets[index]
+  const validated = validateWalletFields(walletType(current), req.body, {
+    excludeId: current.id,
+    missingXpubError: "invalid data"
+  })
 
-  if (walletType(current) === "xmr") {
+  if (validated.error) {
+    return res.status(400).json({ error: validated.error })
+  }
 
-    let info
-
-    try {
-      info = monero.validateMoneroWallet(req.body)
-    } catch (e) {
-      return res.status(400).json({ error: e.message })
-    }
-
-    if (wallets.some(w => w.address === info.address && w.id !== current.id)) {
-      return res.status(400).json({ error: "address already exists" })
-    }
-
-    current.wallet = wallet
-    current.address = info.address
-    current.viewKey = info.viewKey
-    current.restoreHeight = info.restoreHeight
-
-  } else if (walletType(current) === "zec") {
-
-    let info
-
-    try {
-      info = zcash.validateZcashWallet(req.body)
-    } catch (e) {
-      return res.status(400).json({ error: e.message })
-    }
-
-    if (info.ufvk) {
-      if (wallets.some(w => w.ufvk === info.ufvk && w.type === "zec" && w.id !== current.id)) {
-        return res.status(400).json({ error: "viewing key already exists" })
-      }
-
-      current.wallet = wallet
-      current.ufvk = info.ufvk
-      current.birthday = info.birthday
+  current.wallet = wallet
+  Object.assign(current, validated.fields)
+  if (validated.fields.type === "zec") {
+    if (validated.fields.ufvk) {
       delete current.address
     } else {
-      if (wallets.some(w => w.address === info.address && w.type === "zec" && w.id !== current.id)) {
-        return res.status(400).json({ error: "address already exists" })
-      }
-
-      current.wallet = wallet
-      current.address = info.address
       delete current.ufvk
       delete current.birthday
     }
-
-  } else {
-
-    const xpub = (req.body.xpub || "").trim()
-
-    if (!xpub) {
-      return res.status(400).json({ error: "invalid data" })
-    }
-
-    try {
-      validateKey(xpub)
-    } catch (e) {
-      return res.status(400).json({ error: e.message })
-    }
-
-    if (wallets.some(w => w.xpub === xpub && w.id !== current.id)) {
-      return res.status(400).json({ error: "xpub already exists" })
-    }
-
-    current.wallet = wallet
-    current.xpub = xpub
-
   }
 
   if (!saveWalletsToResponse(res)) return
@@ -996,12 +830,13 @@ app.post("/wallet/update", (req, res) => {
 
 
 function withTimeout(p, ms = 5000) {
+  let timer
   return Promise.race([
     p,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("timeout")), ms)
-    )
-  ])
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timeout")), ms)
+    })
+  ]).finally(() => clearTimeout(timer))
 }
 
 

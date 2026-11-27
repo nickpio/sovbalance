@@ -50,15 +50,15 @@ for (const asset of ASSETS) {
     coinUnits[asset] = COINS[asset].units.some(u => u.id === saved) ? saved : COINS[asset].units[0].id
 }
 
-var enabledAssets = loadAssetFlags("sovbalance-assets", false)
+var enabledAssets = loadEnabledAssets()
 // null until /nodes answers; every asset counts as available until then
 var availableAssets = null
 var canWrite = false
 
-function loadAssetFlags(key, allowEmpty) {
+function loadEnabledAssets() {
     const fallback = Object.fromEntries(ASSETS.map(a => [a, true]))
     try {
-        const raw = localStorage.getItem(key)
+        const raw = localStorage.getItem("sovbalance-assets")
         if (!raw) return fallback
         const parsed = JSON.parse(raw)
         const enabled = new Set(
@@ -67,15 +67,14 @@ function loadAssetFlags(key, allowEmpty) {
                 : Object.keys(parsed || {}).filter(k => parsed[k])
         )
         const next = Object.fromEntries(ASSETS.map(a => [a, enabled.has(a)]))
-        if (!allowEmpty && !ASSETS.some(a => next[a])) return fallback
-        return next
+        return ASSETS.some(a => next[a]) ? next : fallback
     } catch (e) {
         return fallback
     }
 }
 
-function saveAssetFlags(key, flags) {
-    localStorage.setItem(key, JSON.stringify(ASSETS.filter(asset => flags[asset])))
+function saveEnabledAssets(flags) {
+    localStorage.setItem("sovbalance-assets", JSON.stringify(ASSETS.filter(asset => flags[asset])))
 }
 
 // Table order: { key: "name" | "percent" | "currency", dir: 1 | -1 }
@@ -127,7 +126,7 @@ let scanning = false
 
 
 function btcToSats(btc) {
-    return Number(BigInt(Math.round(Number(btc) * 1e8)))
+    return Math.round((Number(btc) || 0) * 1e8)
 }
 
 function xmrToPiconero(xmr) {
@@ -151,9 +150,7 @@ function splitAmountLabel(text) {
 }
 
 function walletAsset(w) {
-    if (w.type === "xmr") return "xmr"
-    if (w.type === "zec") return "zec"
-    return "btc"
+    return COINS[w.type] ? w.type : "btc"
 }
 
 function assetAvailable(asset) {
@@ -340,9 +337,10 @@ function setPriceLine(id, show, text) {
 }
 
 function applyDisplay() {
-    paintPrices()
     if (walletsCache.length) {
         renderWallets(walletsCache)
+    } else {
+        paintPrices()
     }
 }
 
@@ -366,7 +364,7 @@ function toggleAsset(asset) {
     if (!ASSETS.includes(asset) || !assetAvailable(asset)) return
     if (enabledAssets[asset] && enabledAssetList().length === 1) return
     enabledAssets[asset] = !enabledAssets[asset]
-    saveAssetFlags("sovbalance-assets", enabledAssets)
+    saveEnabledAssets(enabledAssets)
     applyDisplay()
 }
 
@@ -444,14 +442,8 @@ function openSettings() {
 }
 
 async function updatePrices(force = false) {
-
     await loadPrices(force)
-    paintPrices()
-
-    if (walletsCache.length) {
-        renderWallets(walletsCache)
-    }
-
+    applyDisplay()
 }
 
 
@@ -583,20 +575,13 @@ function renderRows() {
             ? `<div class="wallet-error">${w.error}</div>`
             : walletSyncMarkup(w)
 
-        rows += canWrite
-            ? `
-<tr onclick="editWallet(${w.id})">
+        const rowAttr = canWrite ? `onclick="editWallet(${w.id})"` : `class="view-only-row"`
+        rows += `
+<tr ${rowAttr}>
 <td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
 <td class="percentage">${perc}%</td>
 <td class="balance" title="${amountTitle(w)}">${formatAmount(w)}</td>
-<td class="chevron">›</td>
-</tr>`
-            : `
-<tr class="view-only-row">
-<td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
-<td class="percentage">${perc}%</td>
-<td class="balance" title="${amountTitle(w)}">${formatAmount(w)}</td>
-<td class="chevron"></td>
+<td class="chevron">${canWrite ? "›" : ""}</td>
 </tr>`
     }
 
@@ -633,8 +618,6 @@ async function load(rescan = true) {
     }
 
     if (!rescan) return
-
-    document.getElementById("lastUpdated").innerText = "Scanning…"
 
     let poll = null
     let pollInFlight = false
@@ -840,11 +823,24 @@ function renderChart() {
 }
 
 
-function loginRequiredError(r, data) {
-    return !r || r.type === "opaqueredirect" || !data
+const XPUB_LABELS = {
+    zpub: "Detected: Native SegWit (BIP84)",
+    ypub: "Detected: Nested SegWit (BIP49)",
+    xpub: "Detected: Legacy (BIP44)"
 }
 
-async function saveWalletRequest(url, body) {
+function readFileBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "")
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+    })
+}
+
+async function saveWalletRequest(url, body, fallbackError) {
+
+    const showError = title => Swal.fire({ icon: "error", title })
 
     try {
 
@@ -855,42 +851,25 @@ async function saveWalletRequest(url, body) {
             redirect: "manual"
         })
 
-        if (r.type === "opaqueredirect") {
-            await Swal.fire({
-                icon: "error",
-                title: "Log in to Umbrel to make changes"
-            })
-            return false
-        }
+        const data = r.type === "opaqueredirect" ? null : await r.json().catch(() => null)
 
-        const data = await r.json().catch(() => null)
-
-        if (loginRequiredError(r, data)) {
-            await Swal.fire({
-                icon: "error",
-                title: "Log in to Umbrel to make changes"
-            })
-            return false
+        if (!data) {
+            await showError("Log in to Umbrel to make changes")
+            return null
         }
 
         if (!r.ok) {
-            await Swal.fire({
-                icon: "error",
-                title: data.error || ("Request failed (" + r.status + ")")
-            })
-            return false
+            await showError(data.error || fallbackError || ("Request failed (" + r.status + ")"))
+            return null
         }
 
-        return true
+        return data
 
     } catch (e) {
 
         const loginish = !e.message || e.message === "Failed to fetch" || e.name === "TypeError"
-        await Swal.fire({
-            icon: "error",
-            title: loginish ? "Log in to Umbrel to make changes" : (e.message || "Request failed")
-        })
-        return false
+        await showError(loginish ? "Log in to Umbrel to make changes" : (e.message || "Request failed"))
+        return null
 
     }
 
@@ -907,6 +886,8 @@ async function openWalletModal() {
     const tabsHtml = enabled.map((asset, i) =>
         `<button type="button" class="asset-tab${i === 0 ? " active" : ""}" data-asset="${asset}">${COINS[asset].name}</button>`
     ).join("")
+
+    const val = id => document.getElementById(id).value.trim()
 
     const result = await Swal.fire({
 
@@ -965,17 +946,9 @@ spellcheck="false"></textarea>
         willOpen: () => {
 
             const root = Swal.getHtmlContainer()
-            const walletInput = document.getElementById("swal-wallet")
             const xpubInput = document.getElementById("swal-xpub")
-            const addressInput = document.getElementById("swal-address")
-            const viewKeyInput = document.getElementById("swal-viewkey")
-            const restoreInput = document.getElementById("swal-restore")
-            const zecAddressInput = document.getElementById("swal-zec-address")
             const zecBirthdayInput = document.getElementById("swal-zec-birthday")
             const label = document.getElementById("wallet-type")
-            const btcFields = document.getElementById("btc-fields")
-            const xmrFields = document.getElementById("xmr-fields")
-            const zecFields = document.getElementById("zec-fields")
             const tabs = root.querySelectorAll(".asset-tab")
             const btn = Swal.getConfirmButton()
 
@@ -984,20 +957,20 @@ spellcheck="false"></textarea>
 
             function setAsset(next) {
                 asset = next
-                btcFields.style.display = asset === "btc" ? "" : "none"
-                xmrFields.style.display = asset === "xmr" ? "" : "none"
-                zecFields.style.display = asset === "zec" ? "" : "none"
+                ASSETS.forEach(a => {
+                    document.getElementById(`${a}-fields`).style.display = a === asset ? "" : "none"
+                })
                 tabs.forEach(tab => tab.classList.toggle("active", tab.dataset.asset === asset))
                 validate()
             }
 
             function validate() {
 
-                const wallet = cleanInput(walletInput.value)
+                const wallet = cleanInput(document.getElementById("swal-wallet").value)
 
                 if (asset === "zec") {
-                    const address = zecAddressInput.value.trim()
-                    const birthday = zecBirthdayInput.value.trim()
+                    const address = val("swal-zec-address")
+                    const birthday = val("swal-zec-birthday")
                     const isUfvk = address.startsWith("uview1")
                     zecBirthdayInput.style.display = isUfvk ? "" : "none"
                     const validBirthday = birthday === "" || /^\d+$/.test(birthday)
@@ -1009,9 +982,9 @@ spellcheck="false"></textarea>
                 }
 
                 if (asset === "xmr") {
-                    const address = addressInput.value.trim()
-                    const viewKey = viewKeyInput.value.trim()
-                    const restore = restoreInput.value.trim()
+                    const address = val("swal-address")
+                    const viewKey = val("swal-viewkey")
+                    const restore = val("swal-restore")
                     const validAddress = address.startsWith("4") && address.length === 95
                     const validViewKey = /^[0-9a-fA-F]{64}$/.test(viewKey)
                     const validRestore = restore === "" || /^\d+$/.test(restore)
@@ -1019,45 +992,21 @@ spellcheck="false"></textarea>
                     return
                 }
 
-                const key = xpubInput.value.trim().toLowerCase()
-
-                const validPrefix =
-                    key.startsWith("xpub") ||
-                    key.startsWith("ypub") ||
-                    key.startsWith("zpub")
-
-                const validLength = key.length > 100
-
-                btn.disabled = !(wallet && validPrefix && validLength)
+                const key = val("swal-xpub").toLowerCase()
+                const validPrefix = Object.keys(XPUB_LABELS).some(p => key.startsWith(p))
+                btn.disabled = !(wallet && validPrefix && key.length > 100)
             }
 
             tabs.forEach(tab => {
                 tab.addEventListener("click", () => setAsset(tab.dataset.asset))
             })
 
-            walletInput.addEventListener("input", validate)
-            addressInput.addEventListener("input", validate)
-            viewKeyInput.addEventListener("input", validate)
-            restoreInput.addEventListener("input", validate)
-            zecAddressInput.addEventListener("input", validate)
-            zecBirthdayInput.addEventListener("input", validate)
+            for (const id of ["swal-wallet", "swal-address", "swal-viewkey", "swal-restore", "swal-zec-address", "swal-zec-birthday"]) {
+                document.getElementById(id).addEventListener("input", validate)
+            }
 
             xpubInput.addEventListener("input", () => {
-
-                const v = xpubInput.value.trim().toLowerCase()
-
-                if (v.startsWith("zpub"))
-                    label.innerText = "Detected: Native SegWit (BIP84)"
-
-                else if (v.startsWith("ypub"))
-                    label.innerText = "Detected: Nested SegWit (BIP49)"
-
-                else if (v.startsWith("xpub"))
-                    label.innerText = "Detected: Legacy (BIP44)"
-
-                else
-                    label.innerText = ""
-
+                label.innerText = XPUB_LABELS[xpubInput.value.trim().toLowerCase().slice(0, 4)] || ""
                 validate()
             })
 
@@ -1071,56 +1020,33 @@ spellcheck="false"></textarea>
 
             if (!assetEnabled(type)) return false
 
-            return {
-                type,
-                wallet: cleanInput(document.getElementById("swal-wallet").value),
-                xpub: document.getElementById("swal-xpub").value.trim(),
-                address: document.getElementById("swal-address").value.trim(),
-                viewKey: document.getElementById("swal-viewkey").value.trim(),
-                restoreHeight: document.getElementById("swal-restore").value.trim() || 0,
-                zecAddress: document.getElementById("swal-zec-address").value.trim(),
-                zecBirthday: document.getElementById("swal-zec-birthday").value.trim()
+            const wallet = cleanInput(document.getElementById("swal-wallet").value)
+
+            if (type === "xmr") {
+                return {
+                    wallet,
+                    type: "xmr",
+                    address: val("swal-address"),
+                    viewKey: val("swal-viewkey"),
+                    restoreHeight: val("swal-restore") || 0
+                }
             }
+
+            if (type === "zec") {
+                const zecAddress = val("swal-zec-address")
+                return zecAddress.startsWith("uview1")
+                    ? { wallet, type: "zec", ufvk: zecAddress, birthday: val("swal-zec-birthday") }
+                    : { wallet, type: "zec", address: zecAddress }
+            }
+
+            return { wallet, type: "btc", xpub: val("swal-xpub") }
         }
 
     })
 
     if (!result.isConfirmed) return
 
-    const { type, wallet, xpub, address, viewKey, restoreHeight, zecAddress, zecBirthday } = result.value
-
-    let ok = false
-
-    if (type === "xmr") {
-        ok = await saveWalletRequest("/wallet", {
-            wallet,
-            type: "xmr",
-            address,
-            viewKey,
-            restoreHeight
-        })
-    } else if (type === "zec") {
-        ok = zecAddress.startsWith("uview1")
-            ? await saveWalletRequest("/wallet", {
-                wallet,
-                type: "zec",
-                ufvk: zecAddress,
-                birthday: zecBirthday
-            })
-            : await saveWalletRequest("/wallet", {
-                wallet,
-                type: "zec",
-                address: zecAddress
-            })
-    } else {
-        ok = await saveWalletRequest("/wallet", {
-            wallet,
-            type: "btc",
-            xpub
-        })
-    }
-
-    if (ok) load(true)
+    if (await saveWalletRequest("/wallet", result.value)) load(true)
 }
 
 
@@ -1132,18 +1058,12 @@ async function editWallet(id) {
 
     if (!wallet) return
 
-    const isXmr = walletAsset(wallet) === "xmr"
-    const isZec = walletAsset(wallet) === "zec"
+    const asset = walletAsset(wallet)
+    const isXmr = asset === "xmr"
+    const isZec = asset === "zec"
     const isZecShielded = isZec && !!wallet.ufvk
 
-    const result = await Swal.fire({
-
-        title: "Edit Wallet",
-
-        customClass: { popup: "wallet-popup" },
-
-        html: isXmr ? `
-<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
+    const fieldsHtml = isXmr ? `
 <textarea id="swal-address" class="swal2-textarea" rows="2">${wallet.address || ""}</textarea>
 <textarea id="swal-viewkey" class="swal2-textarea" rows="2">${wallet.viewKey || ""}</textarea>
 <input id="swal-restore" class="swal2-input" value="${wallet.restoreHeight || 0}" inputmode="numeric">
@@ -1151,18 +1071,25 @@ async function editWallet(id) {
 <input id="swal-keyimages" class="keyimages-file" type="file">
 <textarea id="swal-keyimages-text" class="swal2-textarea" rows="3" placeholder="Or paste key images JSON" spellcheck="false"></textarea>
 ` : isZecShielded ? `
-<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-ufvk" class="swal2-textarea" rows="3">${wallet.ufvk || ""}</textarea>
 <input id="swal-birthday" class="swal2-input" value="${wallet.birthday || 1687104}" inputmode="numeric">
 <div class="wallet-hint">Unified viewing key (uview1…). Birthday defaults to NU5 (1687104). Changing the key or birthday starts a new scan.</div>
 ` : isZec ? `
-<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-address" class="swal2-textarea" rows="2" maxlength="35">${wallet.address || ""}</textarea>
 <div class="wallet-hint">Transparent mainnet address (t1 or t3). Requires the Zcash Node app.</div>
 ` : `
-<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">
 <textarea id="swal-xpub" class="swal2-textarea" rows="2">${wallet.xpub || ""}</textarea>
-`,
+`
+
+    const val = fieldId => document.getElementById(fieldId).value.trim()
+
+    const result = await Swal.fire({
+
+        title: "Edit Wallet",
+
+        customClass: { popup: "wallet-popup" },
+
+        html: `<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">` + fieldsHtml,
 
         showCancelButton: true,
         confirmButtonText: "Save",
@@ -1172,50 +1099,44 @@ async function editWallet(id) {
         denyButtonColor: "#ef4444",
 
         preConfirm: async () => {
+            const name = cleanInput(document.getElementById("swal-wallet").value)
+
             if (isZecShielded) {
+                const ufvk = val("swal-ufvk")
+                const birthday = val("swal-birthday")
                 return {
-                    wallet: cleanInput(document.getElementById("swal-wallet").value),
-                    ufvk: document.getElementById("swal-ufvk").value.trim(),
-                    birthday: document.getElementById("swal-birthday").value.trim()
+                    body: { id: wallet.id, wallet: name, ufvk, birthday },
+                    rescan: ufvk !== wallet.ufvk || Number(birthday) !== Number(wallet.birthday)
                 }
             }
 
             if (isZec) {
+                const address = val("swal-address")
                 return {
-                    wallet: cleanInput(document.getElementById("swal-wallet").value),
-                    address: document.getElementById("swal-address").value.trim()
+                    body: { id: wallet.id, wallet: name, address },
+                    rescan: address !== wallet.address
                 }
             }
 
             if (isXmr) {
                 const file = document.getElementById("swal-keyimages").files[0]
-                let fileBase64 = ""
-
-                if (file) {
-                    fileBase64 = await new Promise((resolve, reject) => {
-                        const reader = new FileReader()
-                        reader.onload = () => {
-                            const dataUrl = String(reader.result || "")
-                            resolve(dataUrl.split(",")[1] || "")
-                        }
-                        reader.onerror = reject
-                        reader.readAsDataURL(file)
-                    })
-                }
-
+                const address = val("swal-address")
+                const viewKey = val("swal-viewkey")
+                const restoreHeight = val("swal-restore") || 0
                 return {
-                    wallet: cleanInput(document.getElementById("swal-wallet").value),
-                    address: document.getElementById("swal-address").value.trim(),
-                    viewKey: document.getElementById("swal-viewkey").value.trim(),
-                    restoreHeight: document.getElementById("swal-restore").value.trim() || 0,
-                    fileBase64,
-                    keyImagesText: document.getElementById("swal-keyimages-text").value.trim()
+                    body: { id: wallet.id, wallet: name, address, viewKey, restoreHeight },
+                    rescan: address !== wallet.address
+                        || viewKey !== wallet.viewKey
+                        || Number(restoreHeight) !== Number(wallet.restoreHeight),
+                    fileBase64: file ? await readFileBase64(file) : "",
+                    keyImagesText: val("swal-keyimages-text")
                 }
             }
 
+            const xpub = val("swal-xpub")
             return {
-                wallet: cleanInput(document.getElementById("swal-wallet").value),
-                xpub: document.getElementById("swal-xpub").value.trim()
+                body: { id: wallet.id, wallet: name, xpub },
+                rescan: xpub !== wallet.xpub
             }
         }
 
@@ -1224,120 +1145,42 @@ async function editWallet(id) {
     if (result.isDismissed) return
 
     if (result.isDenied) {
-
-        const ok = await saveWalletRequest("/wallet/remove", { id: wallet.id })
-        if (ok) load(true)
+        if (await saveWalletRequest("/wallet/remove", { id: wallet.id })) load(true)
         return
     }
 
-    if (isXmr) {
-        const { wallet: newWallet, address, viewKey, restoreHeight, fileBase64, keyImagesText } = result.value
-        const rescan = address !== wallet.address
-            || viewKey !== wallet.viewKey
-            || Number(restoreHeight) !== Number(wallet.restoreHeight)
+    const { body, rescan, fileBase64, keyImagesText } = result.value
 
-        const ok = await saveWalletRequest("/wallet/update", {
-            id: wallet.id,
-            wallet: newWallet,
-            address,
-            viewKey,
-            restoreHeight
+    if (!await saveWalletRequest("/wallet/update", body)) return
+
+    if (fileBase64 || keyImagesText) {
+
+        Swal.fire({
+            title: "Importing key images",
+            text: "Refreshing the view-only wallet, then applying spends. This can take a while.",
+            allowOutsideClick: false,
+            didOpen: () => Swal.showLoading()
         })
 
-        if (!ok) return
+        const imported = await saveWalletRequest("/wallet/key-images", {
+            id: wallet.id,
+            fileBase64: fileBase64 || undefined,
+            payload: keyImagesText || undefined
+        }, "Key image import failed")
 
-        if (fileBase64 || keyImagesText) {
-
-            Swal.fire({
-                title: "Importing key images",
-                text: "Refreshing the view-only wallet, then applying spends. This can take a while.",
-                allowOutsideClick: false,
-                didOpen: () => Swal.showLoading()
-            })
-
-            const imported = await fetch("/wallet/key-images", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    id: wallet.id,
-                    fileBase64: fileBase64 || undefined,
-                    payload: keyImagesText || undefined
-                }),
-                redirect: "manual"
-            }).then(async r => {
-                if (r.type === "opaqueredirect") {
-                    return { ok: false, data: { error: "Log in to Umbrel to make changes" } }
-                }
-                const data = await r.json().catch(() => null)
-                if (!data) return { ok: false, data: { error: "Log in to Umbrel to make changes" } }
-                return { ok: r.ok, data }
-            }).catch(() => ({ ok: false, data: { error: "Log in to Umbrel to make changes" } }))
-
-            if (!imported.ok) {
-                await Swal.fire({
-                    icon: "error",
-                    title: imported.data.error || "Key image import failed"
-                })
-                load(false)
-                return
-            }
-
+        if (imported) {
             await Swal.fire({
                 icon: "success",
                 title: "Key images imported",
-                text: `Unspent ${Number(imported.data.unspent).toFixed(6)} XMR · spent ${Number(imported.data.spent).toFixed(6)} XMR`
+                text: `Unspent ${Number(imported.unspent).toFixed(6)} XMR · spent ${Number(imported.spent).toFixed(6)} XMR`
             })
-
-            load(false)
-            return
         }
 
-        load(rescan)
+        load(false)
         return
     }
 
-    if (isZecShielded) {
-        const { wallet: newWallet, ufvk, birthday } = result.value
-        const ok = await saveWalletRequest("/wallet/update", {
-            id: wallet.id,
-            wallet: newWallet,
-            ufvk,
-            birthday
-        })
-
-        if (!ok) return
-
-        load(ufvk !== wallet.ufvk || Number(birthday) !== Number(wallet.birthday))
-        return
-    }
-
-    if (isZec) {
-        const { wallet: newWallet, address } = result.value
-        const ok = await saveWalletRequest("/wallet/update", {
-            id: wallet.id,
-            wallet: newWallet,
-            address
-        })
-
-        if (!ok) return
-
-        load(address !== wallet.address)
-        return
-    }
-
-    const { wallet: newWallet, xpub: newXpub } = result.value
-
-    const ok = await saveWalletRequest("/wallet/update", {
-        id: wallet.id,
-        wallet: newWallet,
-        xpub: newXpub
-    })
-
-    if (!ok) return
-
-    if (newXpub === wallet.xpub) return load(false)
-
-    load()
+    load(rescan)
 
 }
 

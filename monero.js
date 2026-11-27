@@ -26,7 +26,17 @@ const SPEND_DIR = process.env.MONERO_SPEND_DIR || (isDocker
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
-let queue = Promise.resolve()
+function createLock() {
+  let queue = Promise.resolve()
+  return fn => {
+    const run = queue.then(fn, fn)
+    queue = run.then(() => undefined, () => undefined)
+    return run
+  }
+}
+
+const withLock = createLock()
+const withDaemonLock = createLock()
 
 
 function isConfigured() {
@@ -39,13 +49,6 @@ function isConfigured() {
 
 function daemonConfigured() {
   return Boolean(DAEMON_HOST)
-}
-
-
-function withLock(fn) {
-  const run = queue.then(fn, fn)
-  queue = run.then(() => undefined, () => undefined)
-  return run
 }
 
 
@@ -66,9 +69,6 @@ async function rpc(method, params = {}, timeoutMs = 30000) {
     throw new Error("Monero Node is not configured. Install the Monero Node app on Umbrel.")
   }
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
   try {
 
     const res = await fetch(URL, {
@@ -80,7 +80,7 @@ async function rpc(method, params = {}, timeoutMs = 30000) {
         method,
         params
       }),
-      signal: controller.signal
+      signal: AbortSignal.timeout(timeoutMs)
     })
 
     const data = await res.json()
@@ -93,7 +93,7 @@ async function rpc(method, params = {}, timeoutMs = 30000) {
 
   } catch (e) {
 
-    if (e.name === "AbortError") {
+    if (e.name === "AbortError" || e.name === "TimeoutError") {
       throw new Error("Monero wallet RPC timeout")
     }
 
@@ -103,8 +103,6 @@ async function rpc(method, params = {}, timeoutMs = 30000) {
 
     throw e
 
-  } finally {
-    clearTimeout(timer)
   }
 
 }
@@ -197,15 +195,6 @@ function digestAuthorization(challenge, method, uri, creds) {
 // time, keeps the handshake on a single session.
 const daemonAgent = new http.Agent({ keepAlive: true, maxSockets: 1 })
 
-let daemonQueue = Promise.resolve()
-
-
-function withDaemonLock(fn) {
-  const run = daemonQueue.then(fn, fn)
-  daemonQueue = run.then(() => undefined, () => undefined)
-  return run
-}
-
 
 function daemonRequest(url, body, authorization, signal) {
 
@@ -274,12 +263,11 @@ function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
 
     const url = daemonUrl(endpoint)
     const body = JSON.stringify(params)
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const signal = AbortSignal.timeout(timeoutMs)
 
     try {
 
-      let res = await daemonSend(url, body, null, controller.signal)
+      let res = await daemonSend(url, body, null, signal)
 
       for (let attempt = 0; res.status === 401 && attempt < 3; attempt++) {
 
@@ -298,7 +286,7 @@ function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
           pass: DAEMON_PASS
         })
 
-        res = await daemonSend(url, body, authorization, controller.signal)
+        res = await daemonSend(url, body, authorization, signal)
 
         // stale=false after a credentialed attempt means the login itself failed
         if (res.status === 401 && !/stale=true/i.test(res.wwwAuthenticate || "")) {
@@ -319,7 +307,7 @@ function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
 
     } catch (e) {
 
-      if (e.name === "AbortError") {
+      if (e.name === "AbortError" || e.name === "TimeoutError") {
         throw new Error("Monero Node RPC timeout")
       }
 
@@ -329,8 +317,6 @@ function daemonPost(endpoint, params = {}, timeoutMs = 30000) {
 
       throw e
 
-    } finally {
-      clearTimeout(timer)
     }
 
   })
@@ -764,40 +750,35 @@ async function computeBalance(wallet) {
 }
 
 
-async function getWalletBalance(wallet) {
-
-  return withLock(async () => {
-
-    await rpc("get_version", {}, 5000)
-    await openOrCreate(wallet)
-
-    try {
-
-      await rpc("refresh", {}, 30 * 60 * 1000)
-
-      const result = await computeBalance(wallet)
-
-      try {
-        await rpc("store")
-      } catch { }
-
-      return result
-
-    } finally {
-
-      try {
-        await rpc("close_wallet")
-      } catch { }
-
-    }
-
-  })
-
+async function storeWallet() {
+  try {
+    await rpc("store")
+  } catch { }
 }
 
 
-function toHex(buf) {
-  return Buffer.from(buf).toString("hex")
+function withOpenWallet(wallet, fn) {
+  return withLock(async () => {
+    await rpc("get_version", {}, 5000)
+    await openOrCreate(wallet)
+    try {
+      await rpc("refresh", {}, 30 * 60 * 1000)
+      return await fn()
+    } finally {
+      try {
+        await rpc("close_wallet")
+      } catch { }
+    }
+  })
+}
+
+
+async function getWalletBalance(wallet) {
+  return withOpenWallet(wallet, async () => {
+    const result = await computeBalance(wallet)
+    await storeWallet()
+    return result
+  })
 }
 
 
@@ -937,11 +918,9 @@ function parseUnencryptedRecords(buf, withOffset) {
     throw new Error("Key image file is truncated")
   }
 
-  const offset = withOffset
-    ? buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24)
-    : 0
+  const offset = withOffset ? buf.readUInt32LE(0) : 0
 
-  const body = buf.slice(headerlen)
+  const body = buf.subarray(headerlen)
   const recordSize = 32 + 64
 
   if (body.length % recordSize !== 0) {
@@ -952,8 +931,8 @@ function parseUnencryptedRecords(buf, withOffset) {
 
   for (let i = 0; i < body.length; i += recordSize) {
     signed_key_images.push({
-      key_image: toHex(body.slice(i, i + 32)),
-      signature: toHex(body.slice(i + 32, i + recordSize))
+      key_image: body.subarray(i, i + 32).toString("hex"),
+      signature: body.subarray(i + 32, i + recordSize).toString("hex")
     })
   }
 
@@ -1028,20 +1007,14 @@ function parseKeyImages(payload, viewKey) {
   }
 
   const raw = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload).trim(), "utf8")
-  const text = raw.toString("utf8").trim()
+  const compact = raw.toString("utf8").replace(/\s+/g, "")
 
-  if (text.startsWith("{") || text.startsWith("[")) {
-    return parseKeyImages(JSON.parse(text), viewKey)
+  if (/^[0-9a-fA-F]+$/.test(compact) && compact.length % 2 === 0) {
+    return parseKeyImageBuffer(Buffer.from(compact, "hex"), viewKey)
   }
 
-  const hex = text.replace(/\s+/g, "")
-
-  if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
-    return parseKeyImageBuffer(Buffer.from(hex, "hex"), viewKey)
-  }
-
-  if (!Buffer.isBuffer(payload) && /^[A-Za-z0-9+/]+=*$/.test(text.replace(/\s+/g, ""))) {
-    return parseKeyImageBuffer(Buffer.from(text, "base64"), viewKey)
+  if (!Buffer.isBuffer(payload) && /^[A-Za-z0-9+/]+=*$/.test(compact)) {
+    return parseKeyImageBuffer(Buffer.from(compact, "base64"), viewKey)
   }
 
   return parseKeyImageBuffer(raw, viewKey)
@@ -1053,43 +1026,27 @@ async function importKeyImages(wallet, payload) {
 
   const parsed = parseKeyImages(payload, wallet.viewKey)
 
-  return withLock(async () => {
+  return withOpenWallet(wallet, async () => {
 
-    await openOrCreate(wallet)
+    const imported = await rpc("import_key_images", {
+      offset: parsed.offset,
+      signed_key_images: parsed.signed_key_images
+    }, 120000)
 
-    try {
+    await storeWallet()
 
-      await rpc("refresh", {}, 30 * 60 * 1000)
+    // Key images settle which outputs are spent, so redo the ring analysis
+    // with the outputs that are still view-only.
+    clearSpendCache(wallet)
 
-      const imported = await rpc("import_key_images", {
-        offset: parsed.offset,
-        signed_key_images: parsed.signed_key_images
-      }, 120000)
+    const { balance, autoSpends } = await computeBalance(wallet)
 
-      try {
-        await rpc("store")
-      } catch { }
-
-      // Key images settle which outputs are spent, so redo the ring analysis
-      // with the outputs that are still view-only.
-      clearSpendCache(wallet)
-
-      const { balance, autoSpends } = await computeBalance(wallet)
-
-      return {
-        balance,
-        autoSpends,
-        spent: Number(imported.spent || 0) / 1e12,
-        unspent: Number(imported.unspent || 0) / 1e12,
-        height: imported.height
-      }
-
-    } finally {
-
-      try {
-        await rpc("close_wallet")
-      } catch { }
-
+    return {
+      balance,
+      autoSpends,
+      spent: Number(imported.spent || 0) / 1e12,
+      unspent: Number(imported.unspent || 0) / 1e12,
+      height: imported.height
     }
 
   })
