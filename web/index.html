@@ -15,12 +15,12 @@
   <link rel="icon" type="image/png" href="/icon.png?v=23">
   <meta name="theme-color" content="#000000">
 
-  <link rel="stylesheet" href="/style.css?v=30">
+  <link rel="stylesheet" href="/style.css?v=31">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-  <script src="/scripts.js?v=36"></script>
+  <script src="/scripts.js?v=37"></script>
 </head>
 
 <body>
@@ -42,6 +42,12 @@
   </header>
 
   <div class="container">
+
+    <div id="notices" class="notices" aria-live="polite" hidden></div>
+
+    <noscript>
+      <div class="notice notice-error">sovBalance needs JavaScript to show your balances.</div>
+    </noscript>
 
     <div class="card total-wrapper">
 

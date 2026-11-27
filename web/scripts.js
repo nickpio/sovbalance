@@ -1,5 +1,119 @@
 let chart
 let walletsCache = []
+
+// ---------------------------------------------------------------------------
+// Notices: errors and warnings shown in a bar under the header. Each notice
+// has a key, so a problem that keeps happening updates one notice instead of
+// stacking copies, and clearNotice(key) removes it once things recover.
+// ---------------------------------------------------------------------------
+
+const notices = new Map()
+// key -> message the user dismissed; it comes back only if the message changes
+const dismissedNotices = new Map()
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+}
+
+function errorMessage(e, fallback = "Something went wrong") {
+    if (!e) return fallback
+    if (typeof e === "string") return e
+    if (e.message === "Failed to fetch" || e.message === "Load failed" || e.message === "NetworkError when attempting to fetch resource.") {
+        return "Could not reach the sovBalance server"
+    }
+    return e.message || fallback
+}
+
+function showNotice(key, message, level = "error") {
+    if (dismissedNotices.get(key) === message) return
+    dismissedNotices.delete(key)
+    const prev = notices.get(key)
+    if (prev && prev.message === message && prev.level === level) return
+    notices.set(key, { message, level })
+    renderNotices()
+}
+
+function clearNotice(key) {
+    dismissedNotices.delete(key)
+    if (!notices.delete(key)) return
+    renderNotices()
+}
+
+function dismissNotice(key) {
+    const n = notices.get(key)
+    if (n) dismissedNotices.set(key, n.message)
+    notices.delete(key)
+    renderNotices()
+}
+
+function renderNotices() {
+    const box = document.getElementById("notices")
+    if (!box) return
+    box.innerHTML = [...notices].map(([key, n]) => `
+<div class="notice notice-${n.level}" role="${n.level === "error" ? "alert" : "status"}">
+  <span class="notice-icon" aria-hidden="true">${n.level === "error" ? "⚠" : "ℹ"}</span>
+  <span class="notice-text">${escapeHtml(n.message)}</span>
+  <button type="button" class="notice-close" data-notice="${escapeHtml(key)}" aria-label="Dismiss">×</button>
+</div>`).join("")
+    box.hidden = notices.size === 0
+}
+
+document.addEventListener("click", e => {
+    const btn = e.target.closest && e.target.closest(".notice-close")
+    if (btn) dismissNotice(btn.dataset.notice)
+})
+
+// Errors nothing else caught still reach the user.
+window.addEventListener("error", e => {
+    // Failed <script>/<img> loads fire here without a message; libraries are
+    // checked separately below.
+    if (!e.message) return
+    console.error("Unexpected error:", e.error || e.message)
+    showNotice("unexpected", "Unexpected error: " + e.message)
+})
+
+window.addEventListener("unhandledrejection", e => {
+    console.error("Unhandled rejection:", e.reason)
+    showNotice("unexpected", "Unexpected error: " + errorMessage(e.reason))
+})
+
+function swalAvailable() {
+    return typeof Swal !== "undefined"
+}
+
+function chartAvailable() {
+    return typeof Chart !== "undefined"
+}
+
+// Dialogs come from SweetAlert2 on a CDN. When it did not load, say so
+// instead of failing silently on every button press.
+function requireSwal() {
+    if (swalAvailable()) return true
+    showNotice("lib-swal", "The dialog library (SweetAlert2) failed to load, so dialogs are unavailable. Check this device's internet connection and reload the page.")
+    return false
+}
+
+// An error the user caused by an action: a dialog when possible, otherwise
+// the notice bar.
+function alertError(title, text) {
+    if (swalAvailable()) {
+        return Swal.fire({ icon: "error", title, text })
+    }
+    showNotice("action", text ? `${title}: ${text}` : title)
+    return Promise.resolve()
+}
+
+function checkLibraries() {
+    requireSwal()
+    if (!chartAvailable()) {
+        showNotice("lib-chart", "The chart library (Chart.js) failed to load, so the balance chart is hidden. Check this device's internet connection and reload the page.", "warning")
+    }
+}
 const ASSETS = ["btc", "xmr", "zec"]
 
 // Everything that differs per coin. The first unit in each list is the
@@ -41,12 +155,30 @@ var totals = { btc: 0, xmr: 0, zec: 0 }
 var totalFiat = 0
 var prices = { btc: { USD: 0, CAD: 0 }, xmr: { USD: 0, CAD: 0 }, zec: { USD: 0, CAD: 0 } }
 var lastPriceFetch = 0
-var fiatCurrency = localStorage.getItem("sovbalance-fiat") === "CAD" ? "CAD" : "USD"
+// Storage can throw (private mode, blocked site data); settings then just
+// do not persist.
+function storageGet(key) {
+    try {
+        return localStorage.getItem(key)
+    } catch (e) {
+        return null
+    }
+}
+
+function storageSet(key, value) {
+    try {
+        localStorage.setItem(key, value)
+    } catch (e) {
+        console.warn("Could not save setting", key, e)
+    }
+}
+
+var fiatCurrency = storageGet("sovbalance-fiat") === "CAD" ? "CAD" : "USD"
 
 // Display unit per coin, persisted as sovbalance-<asset>-unit
 var coinUnits = {}
 for (const asset of ASSETS) {
-    const saved = localStorage.getItem(`sovbalance-${asset}-unit`)
+    const saved = storageGet(`sovbalance-${asset}-unit`)
     coinUnits[asset] = COINS[asset].units.some(u => u.id === saved) ? saved : COINS[asset].units[0].id
 }
 
@@ -58,7 +190,7 @@ var canWrite = false
 function loadEnabledAssets() {
     const fallback = Object.fromEntries(ASSETS.map(a => [a, true]))
     try {
-        const raw = localStorage.getItem("sovbalance-assets")
+        const raw = storageGet("sovbalance-assets")
         if (!raw) return fallback
         const parsed = JSON.parse(raw)
         const enabled = new Set(
@@ -74,7 +206,7 @@ function loadEnabledAssets() {
 }
 
 function saveEnabledAssets(flags) {
-    localStorage.setItem("sovbalance-assets", JSON.stringify(ASSETS.filter(asset => flags[asset])))
+    storageSet("sovbalance-assets", JSON.stringify(ASSETS.filter(asset => flags[asset])))
 }
 
 // Table order: { key: "name" | "percent" | "currency", dir: 1 | -1 }
@@ -83,7 +215,7 @@ var walletSort = loadSort()
 
 function loadSort() {
     try {
-        const parsed = JSON.parse(localStorage.getItem("sovbalance-sort"))
+        const parsed = JSON.parse(storageGet("sovbalance-sort"))
         if (parsed && SORT_KEYS.includes(parsed.key) && [1, -1].includes(parsed.dir)) return parsed
     } catch (e) {
         // fall through to the default order
@@ -96,7 +228,7 @@ function loadSort() {
 function toggleSort(key) {
     const dir = walletSort.key === key ? -walletSort.dir : (key === "percent" ? -1 : 1)
     walletSort = { key, dir }
-    localStorage.setItem("sovbalance-sort", JSON.stringify(walletSort))
+    storageSet("sovbalance-sort", JSON.stringify(walletSort))
     syncSortButtons()
     renderRows()
 }
@@ -173,8 +305,10 @@ async function loadNodes() {
     try {
         const data = await fetchJson("/nodes", 10000)
         availableAssets = Object.fromEntries(ASSETS.map(a => [a, !!data[a]]))
+        clearNotice("nodes")
     } catch (e) {
         console.error("nodes error", e)
+        showNotice("nodes", "Could not detect installed node apps: " + errorMessage(e) + ". All currencies are shown until detection works.", "warning")
         return
     }
     if (availableAssetList().length && !enabledAssetList().length) {
@@ -227,7 +361,11 @@ async function fetchJson(url, timeoutMs) {
         const data = await r.json().catch(() => null)
 
         if (!r.ok) {
-            throw new Error((data && data.error) || ("Request failed (" + r.status + ")"))
+            throw new Error((data && data.error) || ("Request failed (HTTP " + r.status + (r.statusText ? " " + r.statusText : "") + ")"))
+        }
+
+        if (data === null) {
+            throw new Error("The server sent an unreadable response")
         }
 
         return data
@@ -235,7 +373,7 @@ async function fetchJson(url, timeoutMs) {
         if (e.name === "AbortError") {
             throw new Error("Request timed out")
         }
-        throw e
+        throw new Error(errorMessage(e, "Request failed"))
     } finally {
         clearTimeout(timer)
     }
@@ -265,14 +403,32 @@ async function loadPrices(force = false) {
 
         const data = await fetchJson(force ? "/prices?refresh=true" : "/prices", 15000)
 
-        for (const asset of ASSETS) prices[asset] = readFiatMap(data[asset])
-        if (ASSETS.some(a => fiatOf(prices[a]))) {
-            lastPriceFetch = Date.now()
+        const next = Object.fromEntries(ASSETS.map(a => [a, readFiatMap(data[a])]))
+        // Keep prices we already have rather than replace them with zeros
+        for (const asset of ASSETS) {
+            if (fiatOf(next[asset]) || !fiatOf(prices[asset])) prices[asset] = next[asset]
+        }
+        if (ASSETS.some(a => fiatOf(next[a]))) {
+            lastPriceFetch = Number(data.updatedAt) || Date.now()
+        }
+
+        if (data.stale || data.error) {
+            const have = ASSETS.some(a => fiatOf(prices[a]))
+            const since = have && lastPriceFetch ? ` Showing prices from ${new Date(lastPriceFetch).toLocaleTimeString()}.` : " Fiat values are unavailable."
+            showNotice("prices", (data.error ? data.error + "." : "Prices could not be updated.") + since, "warning")
+        } else {
+            const missing = ASSETS.filter(a => assetEnabled(a) && data.failures && data.failures[a] && !fiatOf(prices[a]))
+            if (missing.length) {
+                showNotice("prices", `No price available for ${missing.map(a => a.toUpperCase()).join(", ")}: ${missing.map(a => data.failures[a]).join("; ")}`, "warning")
+            } else {
+                clearNotice("prices")
+            }
         }
 
     } catch (e) {
 
         console.error("price error", e)
+        showNotice("prices", "Could not load prices: " + errorMessage(e), "warning")
 
     }
 
@@ -348,7 +504,7 @@ function setFiat(next) {
     if (next !== "USD" && next !== "CAD") return
     if (next === fiatCurrency) return
     fiatCurrency = next
-    localStorage.setItem("sovbalance-fiat", next)
+    storageSet("sovbalance-fiat", next)
     updatePrices()
 }
 
@@ -356,7 +512,7 @@ function setUnit(asset, next) {
     if (!COINS[asset] || !COINS[asset].units.some(u => u.id === next)) return
     if (next === coinUnits[asset]) return
     coinUnits[asset] = next
-    localStorage.setItem(`sovbalance-${asset}-unit`, next)
+    storageSet(`sovbalance-${asset}-unit`, next)
     applyDisplay()
 }
 
@@ -391,6 +547,7 @@ function syncSettingsTabs() {
 }
 
 function openSettings() {
+    if (!requireSwal()) return
     const assetTabs = ASSETS.map(asset =>
         `<button type="button" class="asset-tab" data-setting="asset" data-value="${asset}" data-asset="${asset}">${asset.toUpperCase()}</button>`
     ).join("")
@@ -533,8 +690,29 @@ function renderWallets(wallets) {
     stopScanIndicator()
     paintPrices()
     renderRows()
-    renderChart()
+    try {
+        renderChart()
+    } catch (e) {
+        console.error("chart error", e)
+        showNotice("chart", "Could not draw the balance chart: " + errorMessage(e), "warning")
+    }
+    reportWalletErrors(wallets)
 
+}
+
+
+// A summary in the notice bar, so a failing wallet is noticed even when it
+// is filtered out or scrolled away. Details stay on the wallet's row.
+function reportWalletErrors(wallets) {
+    const failing = wallets.filter(w => w.error)
+    if (!failing.length) {
+        clearNotice("wallets")
+        return
+    }
+    const names = failing.map(w => `"${w.wallet}"`).join(", ")
+    showNotice("wallets", failing.length === 1
+        ? `Wallet ${names} could not be updated. See the wallet below for details.`
+        : `${failing.length} wallets could not be updated (${names}). See each wallet below for details.`)
 }
 
 
@@ -571,16 +749,19 @@ function renderRows() {
         const asset = walletAsset(w)
         const perc = shareOf(w).toFixed(1)
 
+        const spendError = asset === "xmr" && w.autoSpends && w.autoSpends.error
         const status = w.error
-            ? `<div class="wallet-error">${w.error}</div>`
-            : walletSyncMarkup(w)
+            ? `<div class="wallet-error" role="alert">${escapeHtml(w.error)}</div>`
+            : walletSyncMarkup(w) + (spendError
+                ? `<div class="wallet-warning">Spend detection unavailable (${escapeHtml(w.autoSpends.error)}). Balance may include spent funds.</div>`
+                : "")
 
-        const rowAttr = canWrite ? `onclick="editWallet(${w.id})"` : `class="view-only-row"`
+        const rowAttr = canWrite ? `onclick="editWallet(${Number(w.id)})"` : `class="view-only-row"`
         rows += `
 <tr ${rowAttr}>
-<td class="walletName">${w.wallet}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
+<td class="walletName">${escapeHtml(w.wallet)}<span class="coin-badge ${asset}">${asset.toUpperCase()}</span>${status}</td>
 <td class="percentage">${perc}%</td>
-<td class="balance" title="${amountTitle(w)}">${formatAmount(w)}</td>
+<td class="balance" title="${escapeHtml(amountTitle(w))}">${formatAmount(w)}</td>
 <td class="chevron">${canWrite ? "›" : ""}</td>
 </tr>`
     }
@@ -606,14 +787,23 @@ async function load(rescan = true) {
 
     try {
         renderWallets(await fetchWallets(false))
+        clearNotice("load")
     } catch (e) {
         stopScanIndicator()
         scanning = false
         console.error(e)
-        document.querySelector("#t tbody").innerHTML = `
+        const message = "Could not load wallets: " + errorMessage(e)
+        showNotice("load", walletsCache.length ? message + ". Balances shown may be out of date." : message)
+        if (walletsCache.length) {
+            // Keep showing the last data we had
+            document.getElementById("lastUpdated").innerText = "Update failed"
+        } else {
+            document.querySelector("#t tbody").innerHTML = `
         <tr>
-          <td colspan="4" class="wallet-error">${e.message || "Could not load wallets"}</td>
+          <td colspan="4" class="wallet-error">${escapeHtml(message)} <button type="button" class="btn btn-secondary btn-inline" onclick="load(false)">Retry</button></td>
         </tr>`
+            document.getElementById("lastUpdated").innerText = ""
+        }
         return
     }
 
@@ -634,18 +824,19 @@ async function load(rescan = true) {
             }
         }, 2000)
         renderWallets(await fetchWallets(true))
+        clearNotice("scan")
     } catch (e) {
         console.error(e)
-        document.getElementById("lastUpdated").innerText = e.message || "Scan failed"
+        document.getElementById("lastUpdated").innerText = "Sync failed"
+        showNotice("scan", "Sync failed: " + errorMessage(e) + ". Balances shown may be out of date.")
         return
     } finally {
         if (poll) clearInterval(poll)
         scanning = false
     }
 
-    if (lastPriceFetch) {
-        document.getElementById("lastUpdated").innerText = new Date(lastPriceFetch).toLocaleTimeString()
-    }
+    document.getElementById("lastUpdated").innerText =
+        new Date(lastPriceFetch || Date.now()).toLocaleTimeString()
 
 }
 
@@ -659,12 +850,43 @@ async function pollWallets() {
 
     try {
         const data = await fetchWallets(false)
+        clearNotice("load")
         if (JSON.stringify(data) !== JSON.stringify(walletsCache)) {
             renderWallets(data)
         }
     } catch (e) {
         console.error("poll error", e)
+        showNotice("load", "Could not load wallets: " + errorMessage(e) + ". Balances shown may be out of date.")
     }
+
+    await loadStatus()
+}
+
+
+// Server-wide problems (storage, Electrum connection) that are not tied to
+// one request.
+const statusKeys = new Set()
+
+async function loadStatus() {
+    let data
+    try {
+        data = await fetchJson("/status", 10000)
+    } catch (e) {
+        // Unreachable servers are already reported by the wallet poll
+        console.error("status error", e)
+        return
+    }
+    const seen = new Set()
+    for (const issue of Array.isArray(data.issues) ? data.issues : []) {
+        const key = "server-" + issue.key
+        seen.add(key)
+        showNotice(key, issue.message, issue.level === "warning" ? "warning" : "error")
+    }
+    for (const key of statusKeys) {
+        if (!seen.has(key)) clearNotice(key)
+    }
+    statusKeys.clear()
+    seen.forEach(k => statusKeys.add(k))
 
 }
 
@@ -719,7 +941,11 @@ const innerShadow = {
 
 function destroyChart() {
     if (!chart) return
-    chart.destroy()
+    try {
+        chart.destroy()
+    } catch (e) {
+        console.error("chart destroy error", e)
+    }
     chart = null
 }
 
@@ -741,7 +967,7 @@ function chartSlices() {
 function renderChart() {
     const slices = chartSlices()
     destroyChart()
-    if (!slices.length) return
+    if (!slices.length || !chartAvailable()) return
 
     const useFiat = slices.length > 1 && slices.every(s => s.fiat > 0)
     const values = slices.map(s => useFiat ? s.fiat : s.amount)
@@ -833,14 +1059,14 @@ function readFileBase64(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "")
-        reader.onerror = reject
+        reader.onerror = () => reject(new Error("Could not read " + (file.name || "the file") + ": " + ((reader.error && reader.error.message) || "unknown error")))
         reader.readAsDataURL(file)
     })
 }
 
 async function saveWalletRequest(url, body, fallbackError) {
 
-    const showError = title => Swal.fire({ icon: "error", title })
+    const showError = title => alertError(title)
 
     try {
 
@@ -854,7 +1080,9 @@ async function saveWalletRequest(url, body, fallbackError) {
         const data = r.type === "opaqueredirect" ? null : await r.json().catch(() => null)
 
         if (!data) {
-            await showError("Log in to Umbrel to make changes")
+            await showError(r.type === "opaqueredirect" || r.status === 401 || r.status === 403
+                ? "Log in to Umbrel to make changes"
+                : (fallbackError || "Request failed") + " (HTTP " + r.status + ", unreadable response)")
             return null
         }
 
@@ -867,8 +1095,11 @@ async function saveWalletRequest(url, body, fallbackError) {
 
     } catch (e) {
 
-        const loginish = !e.message || e.message === "Failed to fetch" || e.name === "TypeError"
-        await showError(loginish ? "Log in to Umbrel to make changes" : (e.message || "Request failed"))
+        console.error("request error", url, e)
+        const network = !e.message || e.message === "Failed to fetch" || e.name === "TypeError"
+        await showError(network
+            ? "Could not reach the sovBalance server. Check your connection, or log in to Umbrel to make changes."
+            : (e.message || "Request failed"))
         return null
 
     }
@@ -878,7 +1109,7 @@ async function saveWalletRequest(url, body, fallbackError) {
 
 async function openWalletModal() {
 
-    if (!canWrite) return
+    if (!canWrite || !requireSwal()) return
 
     const enabled = enabledAssetList()
     if (!enabled.length) return
@@ -1052,11 +1283,14 @@ spellcheck="false"></textarea>
 
 async function editWallet(id) {
 
-    if (!canWrite) return
+    if (!canWrite || !requireSwal()) return
 
     const wallet = walletsCache.find(w => w.id === id)
 
-    if (!wallet) return
+    if (!wallet) {
+        showNotice("action", "That wallet is no longer available. Reload the page.", "warning")
+        return
+    }
 
     const asset = walletAsset(wallet)
     const isXmr = asset === "xmr"
@@ -1064,21 +1298,21 @@ async function editWallet(id) {
     const isZecShielded = isZec && !!wallet.ufvk
 
     const fieldsHtml = isXmr ? `
-<textarea id="swal-address" class="swal2-textarea" rows="2">${wallet.address || ""}</textarea>
-<textarea id="swal-viewkey" class="swal2-textarea" rows="2">${wallet.viewKey || ""}</textarea>
-<input id="swal-restore" class="swal2-input" value="${wallet.restoreHeight || 0}" inputmode="numeric">
+<textarea id="swal-address" class="swal2-textarea" rows="2">${escapeHtml(wallet.address)}</textarea>
+<textarea id="swal-viewkey" class="swal2-textarea" rows="2">${escapeHtml(wallet.viewKey)}</textarea>
+<input id="swal-restore" class="swal2-input" value="${escapeHtml(wallet.restoreHeight || 0)}" inputmode="numeric">
 <div class="wallet-hint">Spends are detected automatically. Key images are optional: import them after a sweep with no change output, or to reconcile the balance exactly (Monero GUI: Settings → Wallet → Export key images; Feather: File → Export → Key images). Incoming funds do not need this.</div>
 <input id="swal-keyimages" class="keyimages-file" type="file">
 <textarea id="swal-keyimages-text" class="swal2-textarea" rows="3" placeholder="Or paste key images JSON" spellcheck="false"></textarea>
 ` : isZecShielded ? `
-<textarea id="swal-ufvk" class="swal2-textarea" rows="3">${wallet.ufvk || ""}</textarea>
-<input id="swal-birthday" class="swal2-input" value="${wallet.birthday || 1687104}" inputmode="numeric">
+<textarea id="swal-ufvk" class="swal2-textarea" rows="3">${escapeHtml(wallet.ufvk)}</textarea>
+<input id="swal-birthday" class="swal2-input" value="${escapeHtml(wallet.birthday || 1687104)}" inputmode="numeric">
 <div class="wallet-hint">Unified viewing key (uview1…). Birthday defaults to NU5 (1687104). Changing the key or birthday starts a new scan.</div>
 ` : isZec ? `
-<textarea id="swal-address" class="swal2-textarea" rows="2" maxlength="35">${wallet.address || ""}</textarea>
+<textarea id="swal-address" class="swal2-textarea" rows="2" maxlength="35">${escapeHtml(wallet.address)}</textarea>
 <div class="wallet-hint">Transparent mainnet address (t1 or t3). Requires the Zcash Node app.</div>
 ` : `
-<textarea id="swal-xpub" class="swal2-textarea" rows="2">${wallet.xpub || ""}</textarea>
+<textarea id="swal-xpub" class="swal2-textarea" rows="2">${escapeHtml(wallet.xpub)}</textarea>
 `
 
     const val = fieldId => document.getElementById(fieldId).value.trim()
@@ -1089,7 +1323,7 @@ async function editWallet(id) {
 
         customClass: { popup: "wallet-popup" },
 
-        html: `<input id="swal-wallet" class="swal2-input" value="${wallet.wallet}">` + fieldsHtml,
+        html: `<input id="swal-wallet" class="swal2-input" value="${escapeHtml(wallet.wallet)}">` + fieldsHtml,
 
         showCancelButton: true,
         confirmButtonText: "Save",
@@ -1128,7 +1362,10 @@ async function editWallet(id) {
                     rescan: address !== wallet.address
                         || viewKey !== wallet.viewKey
                         || Number(restoreHeight) !== Number(wallet.restoreHeight),
-                    fileBase64: file ? await readFileBase64(file) : "",
+                    fileBase64: file ? await readFileBase64(file).catch(e => {
+                        Swal.showValidationMessage(errorMessage(e))
+                        return null
+                    }) : "",
                     keyImagesText: val("swal-keyimages-text")
                 }
             }
@@ -1150,6 +1387,8 @@ async function editWallet(id) {
     }
 
     const { body, rescan, fileBase64, keyImagesText } = result.value
+
+    if (fileBase64 === null) return
 
     if (!await saveWalletRequest("/wallet/update", body)) return
 
@@ -1240,28 +1479,34 @@ const centerText = {
 
 function copyText(text) {
 
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-
-        navigator.clipboard.writeText(text)
-
-    } else {
-
+    const fallback = () => {
         const t = document.createElement("textarea")
         t.value = text
         document.body.appendChild(t)
         t.select()
-        document.execCommand("copy")
+        let ok = false
+        try {
+            ok = document.execCommand("copy")
+        } catch (e) {
+            ok = false
+        }
         document.body.removeChild(t)
-
+        if (!ok) throw new Error("Copy is not supported in this browser")
     }
 
-    Swal.fire({
+    const copied = navigator.clipboard && navigator.clipboard.writeText
+        ? navigator.clipboard.writeText(text).catch(fallback)
+        : Promise.resolve().then(fallback)
+
+    copied.then(() => Swal.fire({
         toast: true,
         position: "top",
         icon: "success",
         title: "Lightning address copied",
         showConfirmButton: false,
         timer: 1500
+    })).catch(e => {
+        alertError("Could not copy the address", errorMessage(e) + ". Select it and copy it manually: " + text)
     })
 
 }
@@ -1269,6 +1514,8 @@ function copyText(text) {
 
 
 function donateModal() {
+
+    if (!requireSwal()) return
 
     const addr = "thanksalot@walletofsatoshi.com"
 
@@ -1319,12 +1566,17 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     await new Promise(resolve => setTimeout(resolve, 500))
 
-    const appVersion = await fetch("/appversion")
-        .then(res => res.json())
-        .then(data => data.appversion)
-        .catch(() => "1.0.0")
+    checkLibraries()
 
-    document.title = `sovBalance ${appVersion}`
+    const appVersion = await fetchJson("/appversion", 10000)
+        .then(data => data.appversion || "")
+        .catch(e => {
+            console.error("version error", e)
+            showNotice("load", "Could not reach the sovBalance server: " + errorMessage(e))
+            return ""
+        })
+
+    document.title = appVersion ? `sovBalance ${appVersion}` : "sovBalance"
     document.getElementById("app_version").innerText = appVersion
 
     document.getElementById("donateBtn").addEventListener("click", donateModal)
@@ -1336,6 +1588,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     load(false)
     updatePrices()
+    loadStatus()
 
     setInterval(updatePrices, 60 * 1000)
     setInterval(pollWallets, 30 * 1000)
