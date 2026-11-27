@@ -256,7 +256,7 @@ async function connectElectrum() {
 
     await client.connect()
 
-    await client.server_version("bitBalance", "1.4")
+    await client.server_version("sovBalance", "1.4")
 
     console.log("Electrum connected")
     electrumError = null
@@ -1045,7 +1045,7 @@ async function start() {
   }
 
   const server = app.listen(appPort, () => {
-    console.log(`bitBalance running on port ${appPort}`)
+    console.log(`sovBalance running on port ${appPort}`)
     console.log(`app Version: ${appVersion}`)
   })
 

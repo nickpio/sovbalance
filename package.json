@@ -1,5 +1,5 @@
 {
-  "name": "bitbalance",
+  "name": "sovbalance",
   "version": "1.7.6",
   "description": "Bitcoin, Monero, and Zcash balance monitor (XPUB / view-only / t-addr / uview)",
   "main": "server.js",
