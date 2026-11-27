@@ -1,6 +1,6 @@
 manifestVersion: 1.1
-id: bitbalance
-name: bitBalance
+id: sovbalance
+name: sovBalance
 tagline: Track Bitcoin, Monero, and Zcash wallets privately from your own Umbrel
 category: bitcoin
 version: "1.7.0"
@@ -26,12 +26,11 @@ description: >-
 
   Supports multiple wallets, automatic gap limit scanning for Bitcoin, and
   view-only scanning for Monero directly from your Umbrel node.
-developer: egzola
-website: https://github.com/egzola/bitbalance
-repo: https://github.com/egzola/bitbalance
-support: https://github.com/egzola/bitbalance/issues
-submitter: egzola
-submission: https://github.com/getumbrel/umbrel-apps/pull/5082
+developer: nickpio
+website: https://github.com/nickpio/sovbalance
+repo: https://github.com/nickpio/sovbalance
+support: https://github.com/nickpio/sovbalance/issues
+submitter: nickpio
 path: ""
 dependencies: []
 gallery: []

@@ -3,7 +3,7 @@ version: "3.7"
 services:
   app_proxy:
     environment:
-      APP_HOST: bitbalance_app_1
+      APP_HOST: sovbalance_app_1
       APP_PORT: 3710
       PROXY_AUTH_WHITELIST: "*"
       PROXY_AUTH_BLACKLIST: "/wallet,/wallet/*"
