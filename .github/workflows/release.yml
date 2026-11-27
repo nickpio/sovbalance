@@ -59,9 +59,29 @@ jobs:
           echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
           echo "image_version=${next_tag#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Create version tag
+      - name: Stamp version, commit, and tag
         if: steps.version.outputs.tag != ''
-        run: git tag "${{ steps.version.outputs.tag }}" "$GITHUB_SHA" && git push origin "${{ steps.version.outputs.tag }}"
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          IMAGE_VERSION: ${{ steps.version.outputs.image_version }}
+        run: |
+          set -euo pipefail
+
+          # The app reads its displayed version from package.json, so the
+          # release commit must carry the new version before the image is built.
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Run the release from main; got $GITHUB_REF."
+            exit 1
+          fi
+
+          npm version "$IMAGE_VERSION" --no-git-tag-version
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          git commit -m "Release $TAG"
+          git push origin "HEAD:main"
+          git tag "$TAG"
+          git push origin "$TAG"
 
       - name: Log in to GitHub Container Registry
         if: steps.version.outputs.tag != ''
