@@ -1,37 +1,62 @@
 let chart
 let walletsCache = []
-var totalBTC = 0
-var totalXMR = 0
-var totalZEC = 0
+const ASSETS = ["btc", "xmr", "zec"]
+
+// Everything that differs per coin. The first unit in each list is the
+// default; `tooltipUnit` picks the unit shown in a wallet's balance tooltip.
+const COINS = {
+    btc: {
+        name: "Bitcoin",
+        node: "an Electrum server app (Electrs, Fulcrum, or ElectrumX)",
+        color: "#f7931a",
+        units: [
+            { id: "btc", label: "BTC", format: n => n.toFixed(8) + " BTC" },
+            { id: "mbtc", label: "mBTC", format: n => (n * 1000).toFixed(5) + " mBTC" },
+            { id: "sats", label: "sats", format: n => btcToSats(n).toLocaleString() + " sats" }
+        ],
+        tooltipUnit: unit => unit === "sats" ? "btc" : "sats"
+    },
+    xmr: {
+        name: "Monero",
+        node: "the Monero Node app",
+        color: "#ff6600",
+        units: [
+            { id: "xmr", label: "XMR", format: n => n.toFixed(6) + " XMR" },
+            { id: "piconero", label: "piconeros", format: n => xmrToPiconero(n).toLocaleString() + " piconeros" }
+        ]
+    },
+    zec: {
+        name: "Zcash",
+        node: "the Zcash Node app",
+        color: "#ffd24a",
+        units: [
+            { id: "zec", label: "ZEC", format: n => n.toFixed(8) + " ZEC" },
+            { id: "zats", label: "zats", format: n => btcToSats(n).toLocaleString() + " zats" }
+        ],
+        tooltipUnit: unit => unit === "zats" ? "zec" : "zats"
+    }
+}
+
+var totals = { btc: 0, xmr: 0, zec: 0 }
 var totalFiat = 0
-var btcPrices = { USD: 0, CAD: 0 }
-var xmrPrices = { USD: 0, CAD: 0 }
-var zecPrices = { USD: 0, CAD: 0 }
+var prices = { btc: { USD: 0, CAD: 0 }, xmr: { USD: 0, CAD: 0 }, zec: { USD: 0, CAD: 0 } }
 var lastPriceFetch = 0
 var fiatCurrency = localStorage.getItem("sovbalance-fiat") === "CAD" ? "CAD" : "USD"
-var btcUnit = ["btc", "mbtc", "sats"].includes(localStorage.getItem("sovbalance-btc-unit"))
-    ? localStorage.getItem("sovbalance-btc-unit")
-    : "btc"
-var xmrUnit = ["xmr", "piconero"].includes(localStorage.getItem("sovbalance-xmr-unit"))
-    ? localStorage.getItem("sovbalance-xmr-unit")
-    : "xmr"
-var zecUnit = ["zec", "zats"].includes(localStorage.getItem("sovbalance-zec-unit"))
-    ? localStorage.getItem("sovbalance-zec-unit")
-    : "zec"
-const ASSETS = ["btc", "xmr", "zec"]
-const ASSET_NAMES = { btc: "Bitcoin", xmr: "Monero", zec: "Zcash" }
-const NODE_NAMES = {
-    btc: "an Electrum server app (Electrs, Fulcrum, or ElectrumX)",
-    xmr: "the Monero Node app",
-    zec: "the Zcash Node app"
+
+// Display unit per coin, persisted as sovbalance-<asset>-unit
+var coinUnits = {}
+for (const asset of ASSETS) {
+    const saved = localStorage.getItem(`sovbalance-${asset}-unit`)
+    coinUnits[asset] = COINS[asset].units.some(u => u.id === saved) ? saved : COINS[asset].units[0].id
 }
+
 var enabledAssets = loadAssetFlags("sovbalance-assets", false)
 // null until /nodes answers; every asset counts as available until then
 var availableAssets = null
 var canWrite = false
 
 function loadAssetFlags(key, allowEmpty) {
-    const fallback = { btc: true, xmr: true, zec: true }
+    const fallback = Object.fromEntries(ASSETS.map(a => [a, true]))
     try {
         const raw = localStorage.getItem(key)
         if (!raw) return fallback
@@ -41,12 +66,8 @@ function loadAssetFlags(key, allowEmpty) {
                 ? parsed
                 : Object.keys(parsed || {}).filter(k => parsed[k])
         )
-        const next = {
-            btc: enabled.has("btc"),
-            xmr: enabled.has("xmr"),
-            zec: enabled.has("zec")
-        }
-        if (!allowEmpty && !next.btc && !next.xmr && !next.zec) return fallback
+        const next = Object.fromEntries(ASSETS.map(a => [a, enabled.has(a)]))
+        if (!allowEmpty && !ASSETS.some(a => next[a])) return fallback
         return next
     } catch (e) {
         return fallback
@@ -117,31 +138,10 @@ function xmrToPiconero(xmr) {
     return sign * BigInt(w + f.padEnd(12, "0").slice(0, 12))
 }
 
-function formatBtcAmount(btc) {
-    const n = Number(btc) || 0
-    if (btcUnit === "sats") {
-        return btcToSats(n).toLocaleString() + " sats"
-    }
-    if (btcUnit === "mbtc") {
-        return (n * 1000).toFixed(5) + " mBTC"
-    }
-    return n.toFixed(8) + " BTC"
-}
-
-function formatXmrAmount(xmr) {
-    const n = Number(xmr) || 0
-    if (xmrUnit === "piconero") {
-        return xmrToPiconero(n).toLocaleString() + " piconeros"
-    }
-    return n.toFixed(6) + " XMR"
-}
-
-function formatZecAmount(zec) {
-    const n = Number(zec) || 0
-    if (zecUnit === "zats") {
-        return btcToSats(n).toLocaleString() + " zats"
-    }
-    return n.toFixed(8) + " ZEC"
+// unitId defaults to the asset's current display unit
+function formatAssetAmount(asset, amount, unitId = coinUnits[asset]) {
+    const unit = COINS[asset].units.find(u => u.id === unitId)
+    return unit.format(Number(amount) || 0)
 }
 
 function splitAmountLabel(text) {
@@ -175,7 +175,7 @@ function enabledAssetList() {
 async function loadNodes() {
     try {
         const data = await fetchJson("/nodes", 10000)
-        availableAssets = { btc: !!data.btc, xmr: !!data.xmr, zec: !!data.zec }
+        availableAssets = Object.fromEntries(ASSETS.map(a => [a, !!data[a]]))
     } catch (e) {
         console.error("nodes error", e)
         return
@@ -189,28 +189,16 @@ function visibleWallets(wallets = walletsCache) {
     return wallets.filter(w => assetEnabled(walletAsset(w)))
 }
 
-function fiatOf(prices) {
-    return Number(prices[fiatCurrency]) || 0
-}
-
-function pricesFor(asset) {
-    if (asset === "xmr") return xmrPrices
-    if (asset === "zec") return zecPrices
-    return btcPrices
+function fiatOf(priceMap) {
+    return Number(priceMap[fiatCurrency]) || 0
 }
 
 function walletFiat(w) {
-    return w.balance * fiatOf(pricesFor(walletAsset(w)))
+    return w.balance * fiatOf(prices[walletAsset(w)])
 }
 
 function formatFiat(amount, digits = 2) {
     return "$" + amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })
-}
-
-function formatAssetAmount(asset, amount) {
-    if (asset === "xmr") return formatXmrAmount(amount)
-    if (asset === "zec") return formatZecAmount(amount)
-    return formatBtcAmount(amount)
 }
 
 function formatAmount(w) {
@@ -225,19 +213,11 @@ function amountTitle(w) {
             return "View-only balance. Spend detection unavailable: " + auto.error
         }
         if (auto && auto.count) {
-            return `View-only balance. ${auto.count} spend${auto.count === 1 ? "" : "s"} detected automatically (${formatXmrAmount(auto.xmr)} removed).`
+            return `View-only balance. ${auto.count} spend${auto.count === 1 ? "" : "s"} detected automatically (${formatAssetAmount("xmr", auto.xmr)} removed).`
         }
         return "View-only balance. Spends are detected automatically from your Monero Node."
     }
-    if (asset === "zec") {
-        return zecUnit === "zats"
-            ? Number(w.balance).toFixed(8) + " ZEC"
-            : btcToSats(w.balance).toLocaleString() + " zats"
-    }
-    if (btcUnit === "sats") {
-        return Number(w.balance).toFixed(8) + " BTC"
-    }
-    return btcToSats(w.balance).toLocaleString() + " sats"
+    return formatAssetAmount(asset, w.balance, COINS[asset].tooltipUnit(coinUnits[asset]))
 }
 
 async function fetchJson(url, timeoutMs) {
@@ -280,7 +260,7 @@ async function loadPrices(force = false) {
 
     const now = Date.now()
 
-    if (!force && (fiatOf(btcPrices) || fiatOf(xmrPrices) || fiatOf(zecPrices)) && now - lastPriceFetch < 300000) {
+    if (!force && ASSETS.some(a => fiatOf(prices[a])) && now - lastPriceFetch < 300000) {
         return
     }
 
@@ -288,10 +268,8 @@ async function loadPrices(force = false) {
 
         const data = await fetchJson(force ? "/prices?refresh=true" : "/prices", 15000)
 
-        btcPrices = readFiatMap(data.btc)
-        xmrPrices = readFiatMap(data.xmr)
-        zecPrices = readFiatMap(data.zec)
-        if (fiatOf(btcPrices) || fiatOf(xmrPrices) || fiatOf(zecPrices)) {
+        for (const asset of ASSETS) prices[asset] = readFiatMap(data[asset])
+        if (ASSETS.some(a => fiatOf(prices[a]))) {
             lastPriceFetch = Date.now()
         }
 
@@ -305,48 +283,34 @@ async function loadPrices(force = false) {
 
 function coinTotals(wallets) {
 
-    let btc = 0
-    let xmr = 0
-    let zec = 0
+    const sums = { btc: 0, xmr: 0, zec: 0 }
 
     for (const w of wallets) {
         const asset = walletAsset(w)
-        if (!assetEnabled(asset)) continue
-        if (asset === "xmr") xmr += w.balance
-        else if (asset === "zec") zec += w.balance
-        else btc += w.balance
+        if (assetEnabled(asset)) sums[asset] += w.balance
     }
 
-    return { btc, xmr, zec }
+    return sums
 
+}
+
+function totalId(asset) {
+    return "total" + asset.toUpperCase()
 }
 
 function paintPrices() {
 
-    const { btc, xmr, zec } = coinTotals(walletsCache)
-    const btcPrice = fiatOf(btcPrices)
-    const xmrPrice = fiatOf(xmrPrices)
-    const zecPrice = fiatOf(zecPrices)
-    const fiat = btc * btcPrice + xmr * xmrPrice + zec * zecPrice
+    totals = coinTotals(walletsCache)
+    totalFiat = ASSETS.reduce((sum, a) => sum + totals[a] * fiatOf(prices[a]), 0)
 
-    totalBTC = btc
-    totalXMR = xmr
-    totalZEC = zec
-    totalFiat = fiat
-
-    document.getElementById("totalTop").innerText = formatFiat(fiat) + " " + fiatCurrency
-    setLine("totalBTC", assetEnabled("btc"), formatBtcAmount(btc), fiatLabel(btc, btcPrice))
-    setLine("totalXMR", assetEnabled("xmr"), formatXmrAmount(xmr), fiatLabel(xmr, xmrPrice))
-    setLine("totalZEC", assetEnabled("zec"), formatZecAmount(zec), fiatLabel(zec, zecPrice))
-
-    setPriceLine("btcPrice", assetEnabled("btc") && !!btcPrice,
-        formatFiat(btcPrice) + " " + fiatCurrency)
-
-    setPriceLine("xmrPrice", assetEnabled("xmr") && !!xmrPrice,
-        formatFiat(xmrPrice) + " " + fiatCurrency)
-
-    setPriceLine("zecPrice", assetEnabled("zec") && !!zecPrice,
-        formatFiat(zecPrice) + " " + fiatCurrency)
+    document.getElementById("totalTop").innerText = formatFiat(totalFiat) + " " + fiatCurrency
+    for (const asset of ASSETS) {
+        const price = fiatOf(prices[asset])
+        setLine(totalId(asset), assetEnabled(asset),
+            formatAssetAmount(asset, totals[asset]), fiatLabel(totals[asset], price))
+        setPriceLine(asset + "Price", assetEnabled(asset) && !!price,
+            formatFiat(price) + " " + fiatCurrency)
+    }
 
     if (lastPriceFetch && !scanning) {
         document.getElementById("lastUpdated").innerText = new Date(lastPriceFetch).toLocaleTimeString()
@@ -390,27 +354,11 @@ function setFiat(next) {
     updatePrices()
 }
 
-function setBtcUnit(next) {
-    if (next !== "btc" && next !== "mbtc" && next !== "sats") return
-    if (next === btcUnit) return
-    btcUnit = next
-    localStorage.setItem("sovbalance-btc-unit", next)
-    applyDisplay()
-}
-
-function setXmrUnit(next) {
-    if (next !== "xmr" && next !== "piconero") return
-    if (next === xmrUnit) return
-    xmrUnit = next
-    localStorage.setItem("sovbalance-xmr-unit", next)
-    applyDisplay()
-}
-
-function setZecUnit(next) {
-    if (next !== "zec" && next !== "zats") return
-    if (next === zecUnit) return
-    zecUnit = next
-    localStorage.setItem("sovbalance-zec-unit", next)
+function setUnit(asset, next) {
+    if (!COINS[asset] || !COINS[asset].units.some(u => u.id === next)) return
+    if (next === coinUnits[asset]) return
+    coinUnits[asset] = next
+    localStorage.setItem(`sovbalance-${asset}-unit`, next)
     applyDisplay()
 }
 
@@ -422,19 +370,21 @@ function toggleAsset(asset) {
     applyDisplay()
 }
 
+// Buttons carry data-setting (fiat | asset | unit) and data-value. Unit
+// buttons also carry data-coin; asset buttons carry data-asset, which the
+// stylesheet uses to colour the active tab.
 function syncSettingsTabs() {
     document.querySelectorAll("[data-setting]").forEach(btn => {
-        const on = (btn.dataset.setting === "fiat" && btn.dataset.value === fiatCurrency)
-            || (btn.dataset.setting === "asset" && assetEnabled(btn.dataset.value))
-            || (btn.dataset.setting === "btcUnit" && btn.dataset.value === btcUnit)
-            || (btn.dataset.setting === "xmrUnit" && btn.dataset.value === xmrUnit)
-            || (btn.dataset.setting === "zecUnit" && btn.dataset.value === zecUnit)
+        const { setting, value, coin } = btn.dataset
+        const on = (setting === "fiat" && value === fiatCurrency)
+            || (setting === "asset" && assetEnabled(value))
+            || (setting === "unit" && value === coinUnits[coin])
         btn.classList.toggle("active", on)
         btn.setAttribute("aria-pressed", on ? "true" : "false")
-        if (btn.dataset.setting === "asset") {
-            const missing = !assetAvailable(btn.dataset.value)
+        if (setting === "asset") {
+            const missing = !assetAvailable(value)
             btn.disabled = missing
-            btn.title = missing ? `Install ${NODE_NAMES[btn.dataset.value]} to track ${ASSET_NAMES[btn.dataset.value]}` : ""
+            btn.title = missing ? `Install ${COINS[value].node} to track ${COINS[value].name}` : ""
         }
     })
     document.querySelectorAll("[data-asset-row]").forEach(row => {
@@ -443,6 +393,20 @@ function syncSettingsTabs() {
 }
 
 function openSettings() {
+    const assetTabs = ASSETS.map(asset =>
+        `<button type="button" class="asset-tab" data-setting="asset" data-value="${asset}" data-asset="${asset}">${asset.toUpperCase()}</button>`
+    ).join("")
+
+    const unitRows = ASSETS.map(asset => `
+  <div class="settings-row" data-asset-row="${asset}">
+    <div class="settings-row-label ${asset}">${asset.toUpperCase()}</div>
+    <div class="asset-tabs">
+      ${COINS[asset].units.map(u =>
+        `<button type="button" class="asset-tab" data-setting="unit" data-coin="${asset}" data-value="${u.id}">${u.label}</button>`
+      ).join("")}
+    </div>
+  </div>`).join("")
+
     Swal.fire({
         title: "Settings",
         customClass: { popup: "settings-popup" },
@@ -450,11 +414,7 @@ function openSettings() {
         html: `
 <div class="settings-section">
   <div class="settings-label">Currencies</div>
-  <div class="asset-tabs">
-    <button type="button" class="asset-tab" data-setting="asset" data-value="btc" data-asset="btc">BTC</button>
-    <button type="button" class="asset-tab" data-setting="asset" data-value="xmr" data-asset="xmr">XMR</button>
-    <button type="button" class="asset-tab" data-setting="asset" data-value="zec" data-asset="zec">ZEC</button>
-  </div>
+  <div class="asset-tabs">${assetTabs}</div>
 </div>
 <div class="settings-section">
   <div class="settings-label">Fiat</div>
@@ -465,39 +425,17 @@ function openSettings() {
 </div>
 <div class="settings-section">
   <div class="settings-label">Amount units</div>
-  <div class="settings-row" data-asset-row="btc">
-    <div class="settings-row-label btc">BTC</div>
-    <div class="asset-tabs">
-      <button type="button" class="asset-tab" data-setting="btcUnit" data-value="btc">BTC</button>
-      <button type="button" class="asset-tab" data-setting="btcUnit" data-value="mbtc">mBTC</button>
-      <button type="button" class="asset-tab" data-setting="btcUnit" data-value="sats">sats</button>
-    </div>
-  </div>
-  <div class="settings-row" data-asset-row="xmr">
-    <div class="settings-row-label xmr">XMR</div>
-    <div class="asset-tabs">
-      <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="xmr">XMR</button>
-      <button type="button" class="asset-tab" data-setting="xmrUnit" data-value="piconero">piconeros</button>
-    </div>
-  </div>
-  <div class="settings-row" data-asset-row="zec">
-    <div class="settings-row-label zec">ZEC</div>
-    <div class="asset-tabs">
-      <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zec">ZEC</button>
-      <button type="button" class="asset-tab" data-setting="zecUnit" data-value="zats">zats</button>
-    </div>
-  </div>
+  ${unitRows}
 </div>
 `,
         willOpen: () => {
             syncSettingsTabs()
             document.querySelectorAll("[data-setting]").forEach(btn => {
                 btn.addEventListener("click", () => {
-                    if (btn.dataset.setting === "fiat") setFiat(btn.dataset.value)
-                    else if (btn.dataset.setting === "asset") toggleAsset(btn.dataset.value)
-                    else if (btn.dataset.setting === "btcUnit") setBtcUnit(btn.dataset.value)
-                    else if (btn.dataset.setting === "xmrUnit") setXmrUnit(btn.dataset.value)
-                    else if (btn.dataset.setting === "zecUnit") setZecUnit(btn.dataset.value)
+                    const { setting, value, coin } = btn.dataset
+                    if (setting === "fiat") setFiat(value)
+                    else if (setting === "asset") toggleAsset(value)
+                    else if (setting === "unit") setUnit(coin, value)
                     syncSettingsTabs()
                 })
             })
@@ -630,7 +568,7 @@ function renderRows() {
     const shareOf = w => {
         const asset = walletAsset(w)
         if (useFiat) return totalFiat > 0 ? (walletFiat(w) / totalFiat) * 100 : 0
-        const total = asset === "xmr" ? totalXMR : asset === "zec" ? totalZEC : totalBTC
+        const total = totals[asset]
         return total > 0 ? (w.balance / total) * 100 : 0
     }
 
@@ -751,9 +689,7 @@ async function pollWallets() {
 function clearTable() {
     document.querySelector("#t tbody").innerHTML = ""
     document.getElementById("totalTop").innerText = "-"
-    setLine("totalBTC", false, "")
-    setLine("totalXMR", false, "")
-    setLine("totalZEC", false, "")
+    ASSETS.forEach(asset => setLine(totalId(asset), false, ""))
     destroyChart()
 }
 
@@ -798,13 +734,6 @@ const innerShadow = {
 
 
 
-const ASSET_CHART_COLOR = {
-    btc: "#f7931a",
-    xmr: "#ff6600",
-    zec: "#ffd24a"
-}
-
-
 function destroyChart() {
     if (!chart) return
     chart.destroy()
@@ -813,15 +742,14 @@ function destroyChart() {
 
 
 function chartSlices() {
-    const amounts = { btc: totalBTC, xmr: totalXMR, zec: totalZEC }
-    return ASSETS.filter(asset => amounts[asset] > 0).map(asset => {
-        const amount = amounts[asset]
+    return ASSETS.filter(asset => totals[asset] > 0).map(asset => {
+        const amount = totals[asset]
         return {
             asset,
             label: asset.toUpperCase(),
             amount,
-            fiat: amount * fiatOf(pricesFor(asset)),
-            color: ASSET_CHART_COLOR[asset]
+            fiat: amount * fiatOf(prices[asset]),
+            color: COINS[asset].color
         }
     })
 }
@@ -977,7 +905,7 @@ async function openWalletModal() {
     if (!enabled.length) return
 
     const tabsHtml = enabled.map((asset, i) =>
-        `<button type="button" class="asset-tab${i === 0 ? " active" : ""}" data-asset="${asset}">${ASSET_NAMES[asset]}</button>`
+        `<button type="button" class="asset-tab${i === 0 ? " active" : ""}" data-asset="${asset}">${COINS[asset].name}</button>`
     ).join("")
 
     const result = await Swal.fire({
@@ -1450,24 +1378,15 @@ const centerText = {
             ctx.fillStyle = "#a3a3a3"
             ctx.font = "400 14px system-ui"
             ctx.fillText(fiatCurrency, x, y + 14)
-        } else if (totalXMR && !totalBTC && !totalZEC) {
-            const { value, unit } = splitAmountLabel(formatXmrAmount(totalXMR))
-            ctx.fillText(value, x, y - 8)
-            ctx.fillStyle = "#ff6600"
-            ctx.font = "400 14px system-ui"
-            ctx.fillText(unit, x, y + 14)
-        } else if (totalZEC && !totalBTC && !totalXMR) {
-            const { value, unit } = splitAmountLabel(formatZecAmount(totalZEC))
-            ctx.fillText(value, x, y - 8)
-            ctx.fillStyle = "#ffd24a"
-            ctx.font = "400 14px system-ui"
-            ctx.fillText(unit, x, y + 14)
         } else {
-            const { value, unit } = splitAmountLabel(formatBtcAmount(totalBTC))
+            // Name the coin when it is the only one held; otherwise show BTC
+            const held = ASSETS.filter(a => totals[a])
+            const coin = held.length === 1 ? held[0] : "btc"
+            const { value, unit } = splitAmountLabel(formatAssetAmount(coin, totals[coin]))
             ctx.fillText(value, x, y - 8)
-            ctx.fillStyle = "#f7931a"
+            ctx.fillStyle = COINS[coin].color
             ctx.font = "400 14px system-ui"
-            ctx.fillText(unit || "BTC", x, y + 14)
+            ctx.fillText(unit, x, y + 14)
         }
 
         ctx.restore()
