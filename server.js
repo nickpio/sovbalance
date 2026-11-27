@@ -256,7 +256,12 @@ async function connectElectrum() {
 
     await client.connect()
 
-    await client.server_version("sovBalance", "1.4")
+    // The socket timeout is cleared once connected, so bound the handshake
+    // here; a server that accepts but never replies would otherwise hang.
+    await Promise.race([
+      client.server_version("sovBalance", "1.4"),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Electrum handshake timed out")), 10000))
+    ])
 
     console.log("Electrum connected")
     electrumError = null
@@ -1015,35 +1020,55 @@ process.on("unhandledRejection", e => {
 })
 
 
+async function checkNodes() {
+
+  try {
+    if (electrumConfigured()) {
+      await connectElectrum()
+    } else {
+      console.log("Electrum server not configured")
+    }
+  } catch (e) {
+    console.error("Electrum startup check failed:", e)
+  }
+
+  try {
+    if (monero.isConfigured()) {
+      const ok = await monero.ping()
+      console.log(ok ? "Monero wallet-rpc connected" : "Monero wallet-rpc not reachable")
+
+      if (monero.daemonConfigured()) {
+        const daemonOk = await monero.daemonPing()
+        console.log(daemonOk ? "Monero Node RPC connected" : "Monero Node RPC not reachable")
+      } else {
+        console.log("Monero Node RPC not configured (spend detection off)")
+      }
+    } else {
+      console.log("Monero wallet-rpc not configured")
+    }
+  } catch (e) {
+    console.error("Monero startup check failed:", e)
+  }
+
+  try {
+    if (zcash.isConfigured()) {
+      const ok = await zcash.ping()
+      console.log(ok ? "Zcash lightwalletd connected" : "Zcash lightwalletd not reachable")
+    } else {
+      console.log("Zcash lightwalletd not configured")
+    }
+  } catch (e) {
+    console.error("Zcash startup check failed:", e)
+  }
+
+}
+
 async function start() {
 
-  if (electrumConfigured()) {
-    await connectElectrum()
-  } else {
-    console.log("Electrum server not configured")
-  }
-
-  if (monero.isConfigured()) {
-    const ok = await monero.ping()
-    console.log(ok ? "Monero wallet-rpc connected" : "Monero wallet-rpc not reachable")
-
-    if (monero.daemonConfigured()) {
-      const daemonOk = await monero.daemonPing()
-      console.log(daemonOk ? "Monero Node RPC connected" : "Monero Node RPC not reachable")
-    } else {
-      console.log("Monero Node RPC not configured (spend detection off)")
-    }
-  } else {
-    console.log("Monero wallet-rpc not configured")
-  }
-
-  if (zcash.isConfigured()) {
-    const ok = await zcash.ping()
-    console.log(ok ? "Zcash lightwalletd connected" : "Zcash lightwalletd not reachable")
-  } else {
-    console.log("Zcash lightwalletd not configured")
-  }
-
+  // Listen before any node checks. A node that accepts the TCP connection
+  // but never answers used to block app.listen forever, so the proxy had
+  // nothing to connect to. Node checks now run in the background and update
+  // the status the UI reads.
   const server = app.listen(appPort, () => {
     console.log(`sovBalance running on port ${appPort}`)
     console.log(`app Version: ${appVersion}`)
@@ -1053,6 +1078,8 @@ async function start() {
     console.error(`Could not listen on port ${appPort}:`, e.message)
     process.exit(1)
   })
+
+  checkNodes()
 
   scheduleXmrRefresh()
 
