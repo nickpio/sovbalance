@@ -12,8 +12,8 @@ Track Bitcoin, Monero, and Zcash using the node services you run. Your wallet ke
 <br>
 
 [![Bitcoin](https://img.shields.io/badge/Bitcoin-self--hosted-f7931a?style=for-the-badge&logo=bitcoin&logoColor=white)](#supported-wallets)
-[![Monero](https://img.shields.io/badge/Monero-view--only-f26822?style=for-the-badge)](#supported-wallets)
-[![Zcash](https://img.shields.io/badge/Zcash-shielded-f4b728?style=for-the-badge)](#supported-wallets)
+[![Monero](https://img.shields.io/badge/Monero-view--only-f26822?style=for-the-badge&logo=monero&logoColor=white)](#supported-wallets)
+[![Zcash](https://img.shields.io/badge/Zcash-shielded-f4b728?style=for-the-badge&logo=zcash&logoColor=white)](#supported-wallets)
 [![Umbrel](https://img.shields.io/badge/Runs%20on-Umbrel-3b82f6?style=for-the-badge)](#installation)
 [![License](https://img.shields.io/badge/license-MIT-0f766e?style=for-the-badge)](#license)
 
